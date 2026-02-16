@@ -255,3 +255,348 @@ func TestUpdate_TickMsg_ReturnsCmd(t *testing.T) {
 		t.Fatal("expected non-nil cmd from tickMsg (should trigger scan + next tick)")
 	}
 }
+
+// --- Task 3.5: Filter mode tests ---
+
+func TestUpdate_SlashKey_EntersFilterMode(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+
+	result, _ := m.Update(keyMsg("/"))
+	updated := result.(Model)
+	if updated.mode != modeFilter {
+		t.Errorf("mode = %d, want modeFilter (%d)", updated.mode, modeFilter)
+	}
+}
+
+func TestUpdate_FilterMode_TypingFilters(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080, Process: "node"},
+		{Port: 3000, Process: "python"},
+	})
+	m.mode = modeFilter
+
+	// Type "node"
+	result, _ := m.Update(keyMsg("n"))
+	m = result.(Model)
+	result, _ = m.Update(keyMsg("o"))
+	m = result.(Model)
+	result, _ = m.Update(keyMsg("d"))
+	m = result.(Model)
+	result, _ = m.Update(keyMsg("e"))
+	updated := result.(Model)
+
+	if updated.filterText != "node" {
+		t.Errorf("filterText = %q, want %q", updated.filterText, "node")
+	}
+	if len(updated.filtered) != 1 {
+		t.Fatalf("expected 1 filtered server, got %d", len(updated.filtered))
+	}
+	if updated.filtered[0].Process != "node" {
+		t.Errorf("filtered[0].Process = %q, want %q", updated.filtered[0].Process, "node")
+	}
+}
+
+func TestUpdate_FilterMode_EscExits(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+	m.mode = modeFilter
+	m.filterText = "test"
+
+	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated := result.(Model)
+	if updated.mode != modeNormal {
+		t.Errorf("mode = %d, want modeNormal (%d)", updated.mode, modeNormal)
+	}
+}
+
+func TestUpdate_FilterMode_BackspaceRemovesChar(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080, Process: "node"},
+		{Port: 3000, Process: "python"},
+	})
+	m.mode = modeFilter
+	m.filterText = "node"
+	m.applyFilter() // should filter to 1
+
+	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = result.(Model)
+	if m.filterText != "nod" {
+		t.Errorf("filterText = %q, want %q", m.filterText, "nod")
+	}
+}
+
+func TestApplyFilter_MatchesPort(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080, Process: "node"},
+		{Port: 3000, Process: "python"},
+	})
+	m.filterText = "8080"
+	m.applyFilter()
+
+	if len(m.filtered) != 1 {
+		t.Fatalf("expected 1, got %d", len(m.filtered))
+	}
+	if m.filtered[0].Port != 8080 {
+		t.Errorf("filtered[0].Port = %d, want 8080", m.filtered[0].Port)
+	}
+}
+
+func TestApplyFilter_MatchesProcess(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080, Process: "node"},
+		{Port: 3000, Process: "python"},
+	})
+	m.filterText = "python"
+	m.applyFilter()
+
+	if len(m.filtered) != 1 {
+		t.Fatalf("expected 1, got %d", len(m.filtered))
+	}
+	if m.filtered[0].Process != "python" {
+		t.Errorf("filtered[0].Process = %q, want %q", m.filtered[0].Process, "python")
+	}
+}
+
+func TestApplyFilter_MatchesLabel(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080, Process: "node", Label: "web-api"},
+		{Port: 3000, Process: "python", Label: "frontend"},
+	})
+	m.filterText = "web"
+	m.applyFilter()
+
+	if len(m.filtered) != 1 {
+		t.Fatalf("expected 1, got %d", len(m.filtered))
+	}
+	if m.filtered[0].Label != "web-api" {
+		t.Errorf("filtered[0].Label = %q, want %q", m.filtered[0].Label, "web-api")
+	}
+}
+
+func TestApplyFilter_CaseInsensitive(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080, Process: "Node"},
+		{Port: 3000, Process: "Python"},
+	})
+	m.filterText = "node"
+	m.applyFilter()
+
+	if len(m.filtered) != 1 {
+		t.Fatalf("expected 1, got %d", len(m.filtered))
+	}
+}
+
+func TestApplyFilter_EmptyShowsAll(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080}, {Port: 3000},
+	})
+	m.filterText = ""
+	m.applyFilter()
+
+	if len(m.filtered) != 2 {
+		t.Errorf("expected 2, got %d", len(m.filtered))
+	}
+}
+
+func TestApplyFilter_CursorClamped(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080, Process: "node"},
+		{Port: 3000, Process: "python"},
+		{Port: 443, Process: "nginx"},
+	})
+	m.cursor = 2 // pointing at nginx
+
+	m.filterText = "node"
+	m.applyFilter()
+
+	if m.cursor != 0 {
+		t.Errorf("cursor = %d, want 0 (clamped after filter)", m.cursor)
+	}
+}
+
+// --- Task 3.6: Kill confirmation tests ---
+
+func TestUpdate_KillKey_EntersConfirmMode(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080, PID: 1234}})
+
+	result, _ := m.Update(keyMsg("x"))
+	updated := result.(Model)
+	if updated.mode != modeConfirmKill {
+		t.Errorf("mode = %d, want modeConfirmKill (%d)", updated.mode, modeConfirmKill)
+	}
+}
+
+func TestUpdate_KillKey_NoServers_DoesNothing(t *testing.T) {
+	m := modelWithServers([]scanner.Server{})
+
+	result, _ := m.Update(keyMsg("x"))
+	updated := result.(Model)
+	if updated.mode != modeNormal {
+		t.Errorf("mode = %d, want modeNormal (no servers to kill)", updated.mode)
+	}
+}
+
+func TestUpdate_ConfirmKill_YConfirms(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080, PID: 1234}})
+	m.mode = modeConfirmKill
+
+	result, cmd := m.Update(keyMsg("y"))
+	updated := result.(Model)
+	if updated.mode != modeNormal {
+		t.Errorf("mode = %d, want modeNormal after confirm", updated.mode)
+	}
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd (kill command)")
+	}
+}
+
+func TestUpdate_ConfirmKill_NCancels(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080, PID: 1234}})
+	m.mode = modeConfirmKill
+
+	result, _ := m.Update(keyMsg("n"))
+	updated := result.(Model)
+	if updated.mode != modeNormal {
+		t.Errorf("mode = %d, want modeNormal after cancel", updated.mode)
+	}
+}
+
+func TestUpdate_ConfirmKill_EscCancels(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080, PID: 1234}})
+	m.mode = modeConfirmKill
+
+	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated := result.(Model)
+	if updated.mode != modeNormal {
+		t.Errorf("mode = %d, want modeNormal after esc", updated.mode)
+	}
+}
+
+func TestUpdate_KillResult_TriggersRefresh(t *testing.T) {
+	mock := &scanner.MockScanner{Servers: []scanner.Server{{Port: 8080}}}
+	cfg := config.Default()
+	m := New(mock, cfg, "")
+
+	_, cmd := m.Update(killResultMsg{pid: 1234})
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd (rescan after kill)")
+	}
+}
+
+// --- Task 3.7: Label editing tests ---
+
+func TestUpdate_LabelKey_EntersLabelMode(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080, PID: 1234}})
+
+	result, _ := m.Update(keyMsg("l"))
+	updated := result.(Model)
+	if updated.mode != modeLabel {
+		t.Errorf("mode = %d, want modeLabel (%d)", updated.mode, modeLabel)
+	}
+}
+
+func TestUpdate_LabelKey_NoServers_DoesNothing(t *testing.T) {
+	m := modelWithServers([]scanner.Server{})
+
+	result, _ := m.Update(keyMsg("l"))
+	updated := result.(Model)
+	if updated.mode != modeNormal {
+		t.Errorf("mode = %d, want modeNormal (no servers to label)", updated.mode)
+	}
+}
+
+func TestUpdate_LabelMode_EscCancels(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+	m.mode = modeLabel
+
+	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated := result.(Model)
+	if updated.mode != modeNormal {
+		t.Errorf("mode = %d, want modeNormal after esc", updated.mode)
+	}
+}
+
+func TestUpdate_LabelMode_EnterSavesLabel(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+	m.mode = modeLabel
+	m.configPath = "/tmp/test-label-config.yaml"
+	m.labelInput.SetValue("my-api")
+
+	result, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := result.(Model)
+	if updated.mode != modeNormal {
+		t.Errorf("mode = %d, want modeNormal after enter", updated.mode)
+	}
+	if updated.config.Labels[8080] != "my-api" {
+		t.Errorf("Labels[8080] = %q, want %q", updated.config.Labels[8080], "my-api")
+	}
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd (save config)")
+	}
+}
+
+func TestUpdate_LabelMode_PrePopulatesExistingLabel(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+	m.config.SetLabel(8080, "existing-label")
+
+	// Trigger label mode
+	result, _ := m.Update(keyMsg("l"))
+	updated := result.(Model)
+
+	if updated.labelInput.Value() != "existing-label" {
+		t.Errorf("labelInput.Value() = %q, want %q", updated.labelInput.Value(), "existing-label")
+	}
+}
+
+// --- Task 3.8: Help, open, refresh tests ---
+
+func TestUpdate_HelpKey_TogglesHelpMode(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+
+	result, _ := m.Update(keyMsg("?"))
+	updated := result.(Model)
+	if updated.mode != modeHelp {
+		t.Errorf("mode = %d, want modeHelp (%d)", updated.mode, modeHelp)
+	}
+}
+
+func TestUpdate_HelpMode_AnyKeyExits(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+	m.mode = modeHelp
+
+	result, _ := m.Update(keyMsg("a"))
+	updated := result.(Model)
+	if updated.mode != modeNormal {
+		t.Errorf("mode = %d, want modeNormal after key in help mode", updated.mode)
+	}
+}
+
+func TestUpdate_OpenKey_ReturnsCommand(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+
+	_, cmd := m.Update(keyMsg("o"))
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd (open browser)")
+	}
+}
+
+func TestUpdate_OpenKey_NoServers_DoesNothing(t *testing.T) {
+	m := modelWithServers([]scanner.Server{})
+
+	_, cmd := m.Update(keyMsg("o"))
+	if cmd != nil {
+		t.Error("expected nil cmd when no servers")
+	}
+}
+
+func TestUpdate_RefreshKey_TriggersScan(t *testing.T) {
+	mock := &scanner.MockScanner{Servers: []scanner.Server{{Port: 8080}}}
+	cfg := config.Default()
+	m := New(mock, cfg, "")
+	m.servers = []scanner.Server{{Port: 8080}}
+	m.filtered = []scanner.Server{{Port: 8080}}
+
+	_, cmd := m.Update(keyMsg("r"))
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd (manual refresh)")
+	}
+}
