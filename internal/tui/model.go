@@ -52,7 +52,7 @@ func New(s scanner.Scanner, cfg config.Config, cfgPath string) Model {
 
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
-	return nil // Will be implemented in Task 3.3
+	return tea.Batch(m.doScan(), doTick(m.config.RefreshInterval))
 }
 
 // Update implements tea.Model.
