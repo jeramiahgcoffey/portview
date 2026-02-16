@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -598,5 +599,246 @@ func TestUpdate_RefreshKey_TriggersScan(t *testing.T) {
 	_, cmd := m.Update(keyMsg("r"))
 	if cmd == nil {
 		t.Fatal("expected non-nil cmd (manual refresh)")
+	}
+}
+
+// --- Task 4.1: View tests ---
+
+func TestView_ShowsHeader(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080, Process: "node"}})
+	view := m.View()
+
+	if !strings.Contains(view, "portview") {
+		t.Error("view should contain 'portview' header")
+	}
+	if !strings.Contains(view, "PORT") {
+		t.Error("view should contain 'PORT' column header")
+	}
+	if !strings.Contains(view, "PID") {
+		t.Error("view should contain 'PID' column header")
+	}
+	if !strings.Contains(view, "PROCESS") {
+		t.Error("view should contain 'PROCESS' column header")
+	}
+}
+
+func TestView_ShowsServers(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080, PID: 1234, Process: "node"},
+		{Port: 3000, PID: 5678, Process: "python"},
+	})
+	view := m.View()
+
+	if !strings.Contains(view, "8080") {
+		t.Error("view should contain port 8080")
+	}
+	if !strings.Contains(view, "3000") {
+		t.Error("view should contain port 3000")
+	}
+	if !strings.Contains(view, "node") {
+		t.Error("view should contain process 'node'")
+	}
+	if !strings.Contains(view, "python") {
+		t.Error("view should contain process 'python'")
+	}
+}
+
+func TestView_CursorIndicator(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080}, {Port: 3000},
+	})
+	m.cursor = 0
+	view := m.View()
+
+	if !strings.Contains(view, ">") {
+		t.Error("view should contain cursor indicator '>'")
+	}
+}
+
+func TestView_EmptyServerList(t *testing.T) {
+	m := modelWithServers([]scanner.Server{})
+	view := m.View()
+
+	if !strings.Contains(view, "No servers found") {
+		t.Error("view should show 'No servers found' for empty list")
+	}
+}
+
+func TestView_TruncatesLongCommand(t *testing.T) {
+	longCmd := strings.Repeat("a", 100)
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080, PID: 1234, Process: "node", Command: longCmd},
+	})
+	view := m.View()
+
+	// The full 100-char command should not appear
+	if strings.Contains(view, longCmd) {
+		t.Error("view should truncate long commands")
+	}
+}
+
+// --- Task 4.2: Status bar tests ---
+
+func TestStatusBar_ShowsServerCount(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080}, {Port: 3000}, {Port: 443},
+	})
+	bar := m.statusBar()
+
+	if !strings.Contains(bar, "3 servers") {
+		t.Errorf("status bar should contain '3 servers', got: %s", bar)
+	}
+}
+
+func TestStatusBar_ConfirmKillMode(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080, PID: 1234}})
+	m.mode = modeConfirmKill
+	bar := m.statusBar()
+
+	if !strings.Contains(bar, "Kill PID 1234") {
+		t.Errorf("status bar should show kill confirmation, got: %s", bar)
+	}
+	if !strings.Contains(bar, "y/n") {
+		t.Errorf("status bar should show y/n prompt, got: %s", bar)
+	}
+}
+
+func TestStatusBar_ShowsKeybindHints(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+	bar := m.statusBar()
+
+	for _, hint := range []string{"j/k:nav", "o:open", "x:kill", "q:quit"} {
+		if !strings.Contains(bar, hint) {
+			t.Errorf("status bar should contain hint %q, got: %s", hint, bar)
+		}
+	}
+}
+
+// --- Task 4.3: Filter bar tests ---
+
+func TestView_FilterMode_ShowsFilterBar(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+	m.mode = modeFilter
+	m.filterText = "node"
+	view := m.View()
+
+	if !strings.Contains(view, "Filter:") {
+		t.Error("view should show filter bar in filter mode")
+	}
+	if !strings.Contains(view, "node") {
+		t.Error("view should show filter text")
+	}
+}
+
+func TestView_ActiveFilter_ShowsIndicator(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+	m.mode = modeNormal
+	m.filterText = "test"
+	view := m.View()
+
+	if !strings.Contains(view, "Filter:") {
+		t.Error("view should show active filter indicator when filterText is set")
+	}
+}
+
+func TestView_NoFilter_NoFilterBar(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+	m.mode = modeNormal
+	m.filterText = ""
+	view := m.View()
+
+	if strings.Contains(view, "Filter:") {
+		t.Error("view should not show filter bar when no filter is active")
+	}
+}
+
+// --- Task 4.4: Help overlay tests ---
+
+func TestView_HelpMode_ShowsOverlay(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+	m.mode = modeHelp
+	view := m.View()
+
+	if !strings.Contains(view, "Help") {
+		t.Error("view should show 'Help' in help mode")
+	}
+}
+
+func TestView_HelpMode_ShowsAllBindings(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+	m.mode = modeHelp
+	view := m.View()
+
+	for _, binding := range []string{"Navigate", "Open in browser", "Kill process", "Edit label", "Refresh", "Filter", "Quit"} {
+		if !strings.Contains(view, binding) {
+			t.Errorf("help overlay should contain %q", binding)
+		}
+	}
+}
+
+func TestView_NormalMode_NoHelpOverlay(t *testing.T) {
+	m := modelWithServers([]scanner.Server{{Port: 8080}})
+	m.mode = modeNormal
+	view := m.View()
+
+	if strings.Contains(view, "Press any key to close") {
+		t.Error("help overlay should not appear in normal mode")
+	}
+}
+
+// --- Task 5.1: Merge labels and filter hidden tests ---
+
+func TestMergeLabels_AppliesConfigLabels(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080, Process: "node"},
+		{Port: 3000, Process: "python"},
+	})
+	m.config.SetLabel(8080, "web-api")
+	m.mergeLabels()
+
+	if m.servers[0].Label != "web-api" {
+		t.Errorf("servers[0].Label = %q, want %q", m.servers[0].Label, "web-api")
+	}
+	if m.servers[1].Label != "" {
+		t.Errorf("servers[1].Label = %q, want empty", m.servers[1].Label)
+	}
+}
+
+func TestMergeLabels_NoLabel_LeavesEmpty(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080, Process: "node"},
+	})
+	m.mergeLabels()
+
+	if m.servers[0].Label != "" {
+		t.Errorf("servers[0].Label = %q, want empty", m.servers[0].Label)
+	}
+}
+
+func TestFilterHidden_RemovesHiddenPorts(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080}, {Port: 22}, {Port: 3000},
+	})
+	m.config.ToggleHidden(22)
+	m.filterHidden()
+
+	if len(m.servers) != 2 {
+		t.Fatalf("expected 2 servers after hiding port 22, got %d", len(m.servers))
+	}
+	for _, s := range m.servers {
+		if s.Port == 22 {
+			t.Error("port 22 should be hidden")
+		}
+	}
+}
+
+func TestFilterHidden_NoHidden_KeepsAll(t *testing.T) {
+	m := modelWithServers([]scanner.Server{
+		{Port: 8080}, {Port: 3000},
+	})
+	m.filterHidden()
+
+	if len(m.servers) != 2 {
+		t.Errorf("expected 2 servers (none hidden), got %d", len(m.servers))
 	}
 }

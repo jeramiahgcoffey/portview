@@ -73,6 +73,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.err = nil
 		m.servers = msg.servers
+		m.mergeLabels()
+		m.filterHidden()
 		m.lastRefresh = time.Now()
 		m.applyFilter()
 		return m, nil
@@ -271,7 +273,22 @@ func (m *Model) applyFilter() {
 	}
 }
 
-// View implements tea.Model.
-func (m Model) View() string {
-	return "" // Will be implemented in Task 4.1
+// mergeLabels applies config labels to servers.
+func (m *Model) mergeLabels() {
+	for i, s := range m.servers {
+		if label, ok := m.config.Labels[s.Port]; ok {
+			m.servers[i].Label = label
+		}
+	}
+}
+
+// filterHidden removes servers on hidden ports.
+func (m *Model) filterHidden() {
+	filtered := m.servers[:0:0]
+	for _, s := range m.servers {
+		if !m.config.IsHidden(s.Port) {
+			filtered = append(filtered, s)
+		}
+	}
+	m.servers = filtered
 }
