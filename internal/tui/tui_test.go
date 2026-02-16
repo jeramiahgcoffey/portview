@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/exp/teatest"
 	"github.com/jeramiahcoffey/portview/internal/config"
 	"github.com/jeramiahcoffey/portview/internal/scanner"
 )
@@ -841,4 +844,37 @@ func TestFilterHidden_NoHidden_KeepsAll(t *testing.T) {
 	if len(m.servers) != 2 {
 		t.Errorf("expected 2 servers (none hidden), got %d", len(m.servers))
 	}
+}
+
+// --- Task 7.1: Integration test ---
+
+func TestTUI_FullFlow(t *testing.T) {
+	mock := &scanner.MockScanner{
+		Servers: []scanner.Server{
+			{Port: 8080, PID: 1234, Process: "node", Command: "node server.js", State: "LISTEN", Healthy: true},
+			{Port: 3000, PID: 5678, Process: "python", Command: "python app.py", State: "LISTEN"},
+			{Port: 443, PID: 9012, Process: "nginx", Command: "nginx -g daemon off", State: "LISTEN", Healthy: true},
+		},
+	}
+	cfg := config.Default()
+	m := New(mock, cfg, "")
+
+	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 40))
+
+	// Wait for servers to appear in output
+	teatest.WaitFor(t, tm.Output(), func(bts []byte) bool {
+		return bytes.Contains(bts, []byte("8080")) &&
+			bytes.Contains(bts, []byte("3000")) &&
+			bytes.Contains(bts, []byte("443"))
+	}, teatest.WithCheckInterval(100*time.Millisecond),
+		teatest.WithDuration(5*time.Second))
+
+	// Navigate down
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+
+	// Quit
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+
+	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
 }
