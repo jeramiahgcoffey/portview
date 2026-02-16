@@ -3,7 +3,9 @@ package scanner
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
+	"time"
 )
 
 func TestMockScanner_ReturnsCannedData(t *testing.T) {
@@ -233,5 +235,82 @@ node     5678 user   3u   IPv6 0x5678    0t0  TCP *:4000 (LISTEN)
 	}
 	if servers[1].Port != 4000 {
 		t.Errorf("servers[1].Port = %d, want 4000", servers[1].Port)
+	}
+}
+
+// --- CheckHealth tests ---
+
+func TestCheckHealth_ResponsivePort(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start listener: %v", err)
+	}
+	defer ln.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	servers := []Server{{Port: port, Process: "test"}}
+
+	result := CheckHealth(servers, 2*time.Second)
+
+	if len(result) != 1 {
+		t.Fatalf("expected 1 server, got %d", len(result))
+	}
+	if !result[0].Healthy {
+		t.Errorf("expected Healthy=true for responsive port %d", port)
+	}
+	// Verify original slice was not mutated
+	if servers[0].Healthy {
+		t.Error("original slice should not be mutated")
+	}
+}
+
+func TestCheckHealth_UnresponsivePort(t *testing.T) {
+	servers := []Server{{Port: 59999, Process: "ghost"}}
+
+	result := CheckHealth(servers, 200*time.Millisecond)
+
+	if len(result) != 1 {
+		t.Fatalf("expected 1 server, got %d", len(result))
+	}
+	if result[0].Healthy {
+		t.Errorf("expected Healthy=false for unresponsive port 59999")
+	}
+}
+
+func TestCheckHealth_ConcurrentChecks(t *testing.T) {
+	ln1, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start listener 1: %v", err)
+	}
+	defer ln1.Close()
+
+	ln2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start listener 2: %v", err)
+	}
+	defer ln2.Close()
+
+	port1 := ln1.Addr().(*net.TCPAddr).Port
+	port2 := ln2.Addr().(*net.TCPAddr).Port
+
+	servers := []Server{
+		{Port: port1, Process: "svc1"},
+		{Port: port2, Process: "svc2"},
+		{Port: 59999, Process: "ghost"},
+	}
+
+	result := CheckHealth(servers, 500*time.Millisecond)
+
+	if len(result) != 3 {
+		t.Fatalf("expected 3 servers, got %d", len(result))
+	}
+	if !result[0].Healthy {
+		t.Errorf("expected result[0] (port %d) Healthy=true", port1)
+	}
+	if !result[1].Healthy {
+		t.Errorf("expected result[1] (port %d) Healthy=true", port2)
+	}
+	if result[2].Healthy {
+		t.Errorf("expected result[2] (port 59999) Healthy=false")
 	}
 }
