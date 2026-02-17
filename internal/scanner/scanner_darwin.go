@@ -54,11 +54,12 @@ func (d *darwinScanner) Scan(ctx context.Context) ([]Server, error) {
 			}
 		}
 
-		// Filter by port range (skip filtering if both Min and Max are zero).
-		if d.portRange.Min != 0 || d.portRange.Max != 0 {
-			if s.Port < d.portRange.Min || s.Port > d.portRange.Max {
-				continue
-			}
+		// Filter by port range (treat 0 as "no bound").
+		if d.portRange.Min != 0 && s.Port < d.portRange.Min {
+			continue
+		}
+		if d.portRange.Max != 0 && s.Port > d.portRange.Max {
+			continue
 		}
 
 		result = append(result, s)

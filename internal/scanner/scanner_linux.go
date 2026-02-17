@@ -44,11 +44,12 @@ func (l *linuxScanner) Scan(ctx context.Context) ([]Server, error) {
 
 	var result []Server
 	for _, s := range servers {
-		// Filter by port range (skip filtering if both Min and Max are zero).
-		if l.portRange.Min != 0 || l.portRange.Max != 0 {
-			if s.Port < l.portRange.Min || s.Port > l.portRange.Max {
-				continue
-			}
+		// Filter by port range (treat 0 as "no bound").
+		if l.portRange.Min != 0 && s.Port < l.portRange.Min {
+			continue
+		}
+		if l.portRange.Max != 0 && s.Port > l.portRange.Max {
+			continue
 		}
 
 		if pid, ok := portPIDs[s.Port]; ok {

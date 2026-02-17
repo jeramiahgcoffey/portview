@@ -55,6 +55,9 @@ func New(s scanner.Scanner, cfg config.Config, cfgPath string) Model {
 
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
+	if m.config.RefreshInterval <= 0 {
+		return m.doScan()
+	}
 	return tea.Batch(m.doScan(), doTick(m.config.RefreshInterval))
 }
 
@@ -83,13 +86,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.doScan(), doTick(m.config.RefreshInterval))
 
 	case killResultMsg:
-		// After a kill, trigger a rescan
-		return m, m.doScan()
-
-	case labelSavedMsg:
+		// After a kill, surface errors and trigger a rescan
 		if msg.err != nil {
 			m.err = msg.err
 		}
+		return m, m.doScan()
+
+	case labelSavedMsg:
+		m.err = msg.err
 		return m, nil
 
 	case tea.KeyMsg:
@@ -173,8 +177,9 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeNormal
 		return m, nil
 	case tea.KeyBackspace:
-		if len(m.filterText) > 0 {
-			m.filterText = m.filterText[:len(m.filterText)-1]
+		r := []rune(m.filterText)
+		if len(r) > 0 {
+			m.filterText = string(r[:len(r)-1])
 			m.applyFilter()
 		}
 		return m, nil
@@ -227,6 +232,7 @@ func (m Model) handleLabelKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.servers[i].Label = label
 				}
 			}
+			m.applyFilter()
 			m.mode = modeNormal
 			m.labelInput.Blur()
 			return m, doSaveConfig(m.configPath, m.config)

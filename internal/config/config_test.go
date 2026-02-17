@@ -280,7 +280,9 @@ func TestSave_OverwritesExistingFile(t *testing.T) {
 }
 
 func TestLoad_MissingFile_ReturnsDefaults(t *testing.T) {
-	cfg, err := Load("/tmp/portview_nonexistent_config_file.yaml")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "missing.yaml")
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("expected nil error for missing file, got %v", err)
 	}

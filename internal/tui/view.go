@@ -165,13 +165,17 @@ func (m Model) viewHelp() string {
 	return helpOverlayStyle.Render(help.String())
 }
 
-// truncate shortens a string to maxLen, adding "…" if truncated.
+// truncate shortens a string to maxLen runes, adding "…" if truncated.
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	if maxLen <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= maxLen {
 		return s
 	}
-	if maxLen <= 1 {
-		return s[:maxLen]
+	if maxLen == 1 {
+		return string(r[:1])
 	}
-	return s[:maxLen-1] + "…"
+	return string(r[:maxLen-1]) + "…"
 }

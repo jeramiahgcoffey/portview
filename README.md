@@ -5,7 +5,7 @@ A single-binary TUI that auto-discovers TCP servers listening on localhost, show
 ## Install
 
 ```bash
-go install github.com/jeramiahcoffey/portview/cmd/portview@latest
+go install github.com/jeramiahgcoffey/portview/cmd/portview@latest
 ```
 
 ## Usage
