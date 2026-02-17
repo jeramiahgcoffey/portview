@@ -1,1 +1,4 @@
 .worktrees/
+bin/
+*.exe
+.DS_Store
