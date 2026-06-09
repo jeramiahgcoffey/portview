@@ -19,11 +19,22 @@ jobs:
       - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
         with:
           go-version-file: go.mod
+      # Mint a short-lived token scoped to the Homebrew tap repo. Inert until the
+      # TAP_APP_ID variable and TAP_APP_PRIVATE_KEY secret are set; GoReleaser
+      # then skips the cask (see .goreleaser.yaml) so releases still ship binaries.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: tap-token
+        if: ${{ vars.TAP_APP_ID != '' }}
+        with:
+          app-id: ${{ vars.TAP_APP_ID }}
+          private-key: ${{ secrets.TAP_APP_PRIVATE_KEY }}
+          owner: jeramiahgcoffey
+          repositories: homebrew-tap
       - uses: goreleaser/goreleaser-action@9c156ee8a17a598857849441385a2041ef570552 # v6.3.0
         with:
           version: latest
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Optional: set to publish the Homebrew tap (see .goreleaser.yaml).
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # Short-lived GitHub App token for publishing the Homebrew cask.
+          HOMEBREW_TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
