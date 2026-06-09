@@ -145,6 +145,37 @@ func TestScanResultUpdatesModel(t *testing.T) {
 	}
 }
 
+func TestKillConfirmPromptRenders(t *testing.T) {
+	tm := newTestModel(t, testServers())
+	out := tm.Output()
+	teatest.WaitFor(t, out, func(b []byte) bool {
+		return bytes.Contains(b, []byte("3000"))
+	}, teatest.WithDuration(3*time.Second))
+
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	teatest.WaitFor(t, out, func(b []byte) bool {
+		return bytes.Contains(b, []byte("Kill PID 1"))
+	}, teatest.WithDuration(3*time.Second))
+
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	quit(t, tm)
+}
+
+func TestFilterInputRenders(t *testing.T) {
+	tm := newTestModel(t, testServers())
+
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("node")})
+	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
+		// The filtered-count indicator confirms the live filter narrowed the list.
+		return bytes.Contains(b, []byte("filtered from 3"))
+	}, teatest.WithDuration(3*time.Second))
+
+	// Exit filter (Enter keeps it) before quitting, since q is text while filtering.
+	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	quit(t, tm)
+}
+
 func TestApplyConfigHidesAndLabels(t *testing.T) {
 	cfg := config.Default()
 	cfg.SetLabel(3000, "frontend")
