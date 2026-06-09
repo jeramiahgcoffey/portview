@@ -1,0 +1,66 @@
+version: 2
+
+project_name: portview
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: portview
+    main: ./cmd/portview
+    binary: portview
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: portview
+    ids:
+      - portview
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+# Publishes a Homebrew cask to github.com/jeramiahgcoffey/homebrew-tap.
+# Upload is skipped until a HOMEBREW_TAP_TOKEN secret is present, so tagged
+# releases still produce binaries + checksums before the tap is set up.
+homebrew_casks:
+  - name: portview
+    ids:
+      - portview
+    description: "A TUI for discovering and managing localhost dev servers"
+    homepage: "https://github.com/jeramiahgcoffey/portview"
+    license: "MIT"
+    repository:
+      owner: jeramiahgcoffey
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    skip_upload: '{{ if isEnvSet "HOMEBREW_TAP_TOKEN" }}false{{ else }}true{{ end }}'
+
+release:
+  draft: false
+  # Tags with a prerelease suffix (e.g. v0.0.1-test, v0.1.0-rc1) are published as
+  # prereleases, not marked "latest".
+  prerelease: auto
