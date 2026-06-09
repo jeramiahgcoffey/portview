@@ -1,40 +1,36 @@
-// Command portview discovers and manages localhost dev servers.
-//
-// Phase 1 scaffolding: this main performs a single scan and prints the
-// discovered servers as a table. It is replaced by the Bubble Tea TUI in a
-// later phase.
+// Command portview is a TUI for discovering and managing localhost dev servers.
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"text/tabwriter"
-	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/jeramiahgcoffey/portview/internal/config"
 	"github.com/jeramiahgcoffey/portview/internal/scanner"
+	"github.com/jeramiahgcoffey/portview/internal/tui"
 )
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "portview: %v\n", err)
+		os.Exit(1)
+	}
+}
 
-	s := scanner.New(scanner.Options{})
-	servers, err := s.Scan(ctx)
+func run() error {
+	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "scan failed: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "PORT\tPID\tPROCESS\tHEALTHY\tCOMMAND")
-	for _, srv := range servers {
-		fmt.Fprintf(w, "%d\t%d\t%s\t%t\t%s\n",
-			srv.Port, srv.PID, srv.Process, srv.Healthy, srv.Command)
-	}
-	if err := w.Flush(); err != nil {
-		fmt.Fprintf(os.Stderr, "flush failed: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("\n%d servers\n", len(servers))
+	s := scanner.New(scanner.Options{
+		MinPort: cfg.PortRange.Min,
+		MaxPort: cfg.PortRange.Max,
+	})
+
+	p := tea.NewProgram(tui.New(s, cfg), tea.WithAltScreen())
+	_, err = p.Run()
+	return err
 }
