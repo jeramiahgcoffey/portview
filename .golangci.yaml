@@ -1,0 +1,24 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - revive
+    - gocritic
+    - misspell
+    - unconvert
+    - unparam
+  exclusions:
+    rules:
+      # Unchecked errors are acceptable in tests for brevity.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

@@ -39,14 +39,14 @@ type Model struct {
 	lastScan time.Time
 	scanErr  error
 
-	mode       mode
-	killTarget scanner.Server  // process awaiting kill confirmation
-	editPort   int             // port whose label is being edited
-	labelInput textinput.Model // inline label editor
+	mode        mode
+	killTarget  scanner.Server  // process awaiting kill confirmation
+	editPort    int             // port whose label is being edited
+	labelInput  textinput.Model // inline label editor
 	filterInput textinput.Model // live filter input
-	filter     string          // active filter query (persists after Enter)
-	showHelp   bool            // full help overlay visible
-	status     string          // transient feedback line
+	filter      string          // active filter query (persists after Enter)
+	showHelp    bool            // full help overlay visible
+	status      string          // transient feedback line
 
 	width  int
 	height int

@@ -79,7 +79,7 @@ func TestParseInodeFromLink(t *testing.T) {
 
 func TestParseCmdline(t *testing.T) {
 	tests := map[string]string{
-		"node\x00server.js\x00":      "node server.js",
+		"node\x00server.js\x00":       "node server.js",
 		"postgres\x00-D\x00/data\x00": "postgres -D /data",
 		"go":                          "go",
 		"":                            "",

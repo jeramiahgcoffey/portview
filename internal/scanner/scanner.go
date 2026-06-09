@@ -66,9 +66,9 @@ type listing struct {
 	Comm string
 }
 
-// inRange reports whether port falls within [min, max] inclusive.
-func inRange(port, min, max int) bool {
-	return port >= min && port <= max
+// inRange reports whether port falls within [lo, hi] inclusive.
+func inRange(port, lo, hi int) bool {
+	return port >= lo && port <= hi
 }
 
 // dedupeByPort collapses listings that share a port (e.g. a server bound on

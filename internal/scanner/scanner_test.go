@@ -42,9 +42,9 @@ func TestMockScannerError(t *testing.T) {
 
 func TestInRange(t *testing.T) {
 	tests := []struct {
-		name          string
+		name           string
 		port, min, max int
-		want          bool
+		want           bool
 	}{
 		{"below", 80, 1024, 65535, false},
 		{"at min", 1024, 1024, 65535, true},
