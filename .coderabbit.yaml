@@ -7,8 +7,11 @@ reviews:
   high_level_summary: true
   poem: false
   review_status: true
+  # Reviews are on-demand only: no automatic review on PR open, and no
+  # incremental review on pushes. Trigger manually by commenting
+  # "@coderabbitai review" on a PR.
   auto_review:
-    enabled: true
+    enabled: false
     drafts: false
   tools:
     golangci-lint:
