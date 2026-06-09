@@ -61,3 +61,6 @@ homebrew_casks:
 
 release:
   draft: false
+  # Tags with a prerelease suffix (e.g. v0.0.1-test, v0.1.0-rc1) are published as
+  # prereleases, not marked "latest".
+  prerelease: auto
