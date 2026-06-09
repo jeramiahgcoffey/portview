@@ -11,8 +11,7 @@ that owns each port, and lets you open, kill, label, and filter them.
 No more `lsof -i -P | grep LISTEN` or trying to remember which port your frontend
 is on.
 
-<!-- TODO: replace with a demo GIF -->
-![demo placeholder](docs/demo.gif)
+![portview demo](docs/demo.gif)
 
 ```text
 ╭─ portview ──────────────────────────────────────────╮
