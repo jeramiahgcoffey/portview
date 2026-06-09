@@ -83,6 +83,35 @@ func TestPartialConfigGetsDefaults(t *testing.T) {
 	}
 }
 
+func TestInvalidPortRangeNormalized(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	// min > max and an out-of-bounds max should be reset to defaults.
+	if err := os.WriteFile(path, []byte("port_range:\n  min: 9000\n  max: 1000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.PortRange.Min != DefaultMinPort || got.PortRange.Max != DefaultMaxPort {
+		t.Errorf("PortRange = %+v, want defaults after normalization", got.PortRange)
+	}
+}
+
+func TestPortRangeMaxClamped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("port_range:\n  min: 2000\n  max: 99999\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.PortRange.Min != 2000 || got.PortRange.Max != DefaultMaxPort {
+		t.Errorf("PortRange = %+v, want min 2000 max clamped to default", got.PortRange)
+	}
+}
+
 func TestSaveCreatesFileLazilyAndRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "portview", "config.yaml")

@@ -1,7 +1,9 @@
 BINARY := portview
 CMD    := ./cmd/portview
 
-.PHONY: build run test test-integration lint fmt tidy install clean
+.PHONY: all build run test test-integration lint fmt tidy install clean
+
+all: build ## Default target: build
 
 build: ## Build the binary into bin/
 	go build -o bin/$(BINARY) $(CMD)

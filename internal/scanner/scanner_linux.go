@@ -48,6 +48,12 @@ func (s *linuxScanner) Scan(_ context.Context) ([]Server, error) {
 			continue
 		}
 		pid := inodeToPID[e.Inode]
+		if pid == 0 {
+			// Owning process not resolvable (e.g. a root-owned socket during an
+			// unprivileged scan). Skip it to match the darwin backend, where
+			// unprivileged lsof hides such processes entirely.
+			continue
+		}
 		name, command := resolveProcessLinux(s.procRoot, pid)
 		servers = append(servers, Server{
 			Port:    e.Port,

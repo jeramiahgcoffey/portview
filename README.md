@@ -14,7 +14,7 @@ is on.
 <!-- TODO: replace with a demo GIF -->
 ![demo placeholder](docs/demo.gif)
 
-```
+```text
 ╭─ portview ──────────────────────────────────────────╮
 │  PORT   PROCESS       COMMAND            LABEL      │
 │ ► 3000  node          next dev           frontend   │

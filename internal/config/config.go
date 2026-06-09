@@ -52,11 +52,16 @@ func (c Config) withDefaults() Config {
 	if c.RefreshInterval <= 0 {
 		c.RefreshInterval = Duration(DefaultRefreshInterval)
 	}
-	if c.PortRange.Min == 0 {
+	// Fill zero values, then guard against nonsensical ranges (e.g. min > max or
+	// out-of-bounds ports) that would otherwise silently break scanning.
+	if c.PortRange.Min <= 0 {
 		c.PortRange.Min = DefaultMinPort
 	}
-	if c.PortRange.Max == 0 {
+	if c.PortRange.Max <= 0 || c.PortRange.Max > 65535 {
 		c.PortRange.Max = DefaultMaxPort
+	}
+	if c.PortRange.Min > c.PortRange.Max {
+		c.PortRange.Min, c.PortRange.Max = DefaultMinPort, DefaultMaxPort
 	}
 	if c.Labels == nil {
 		c.Labels = map[int]string{}

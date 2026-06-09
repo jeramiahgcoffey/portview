@@ -19,7 +19,7 @@ Run the full loop locally — CI runs the same checks on Linux and macOS:
 
 ```sh
 make test               # unit tests
-make test-integration   # tests that touch the real lsof / /proc backend
+make test-integration   # tests that touch the real lsof or /proc backend
 make lint               # golangci-lint (v2)
 ```
 

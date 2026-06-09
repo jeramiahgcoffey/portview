@@ -188,12 +188,14 @@ func truncate(s string, n int) string {
 	if lipgloss.Width(s) <= n {
 		return s
 	}
-	if n == 1 {
-		return "…"
+	const ellipsis = "…"
+	ew := lipgloss.Width(ellipsis)
+	if n < ew {
+		return "" // not even room for the ellipsis
 	}
 	r := []rune(s)
-	for len(r) > 0 && lipgloss.Width(string(r))+1 > n {
+	for len(r) > 0 && lipgloss.Width(string(r))+ew > n {
 		r = r[:len(r)-1]
 	}
-	return string(r) + "…"
+	return string(r) + ellipsis
 }
