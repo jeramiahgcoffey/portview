@@ -44,6 +44,11 @@ func Inspect(ctx context.Context, pid int) (Detail, error) {
 		return Detail{}, err
 	}
 	d.CWD = processCWD(ctx, pid)
+	// On Linux a /proc-based uptime replaces the ps etime value, which can be
+	// garbage on hosts with boot-time clock skew (e.g. some CI runners).
+	if u, ok := processUptime(ctx, pid); ok {
+		d.Uptime = u
+	}
 	return d, nil
 }
 
@@ -60,6 +65,10 @@ func psDetail(ctx context.Context, pid int) (Detail, error) {
 // parsePSDetail parses one `ps -o etime=,%cpu=,%mem=,rss=` output line, e.g.
 //
 //	"  1-02:03:04  0.3  1.2  54321"
+//
+// An unparseable etime degrades to zero (uptime unknown) rather than failing
+// the whole inspection: hosts with boot-time clock skew report nonsense
+// etimes, and the other fields are still good.
 func parsePSDetail(out string) (Detail, error) {
 	fields := strings.Fields(out)
 	if len(fields) != 4 {
@@ -67,7 +76,7 @@ func parsePSDetail(out string) (Detail, error) {
 	}
 	uptime, err := parseEtime(fields[0])
 	if err != nil {
-		return Detail{}, err
+		uptime = 0
 	}
 	cpu, err := strconv.ParseFloat(fields[1], 64)
 	if err != nil {
@@ -84,6 +93,11 @@ func parsePSDetail(out string) (Detail, error) {
 	return Detail{Uptime: uptime, CPUPercent: cpu, MemPercent: mem, RSSKB: rss}, nil
 }
 
+// maxEtimeDays rejects nonsense process ages (100 years). Some virtualized
+// hosts report etime values centuries long when the boot-time clock is
+// skewed; naively converting those overflows time.Duration into negatives.
+const maxEtimeDays = 36500
+
 // parseEtime converts a ps etime value to a Duration. The format is
 // [[dd-]hh:]mm:ss — e.g. "05:03", "1:02:03", or "12-01:02:03".
 func parseEtime(s string) (time.Duration, error) {
@@ -97,17 +111,24 @@ func parseEtime(s string) (time.Duration, error) {
 		days = d
 		rest = s[i+1:]
 	}
+	if days < 0 || days > maxEtimeDays {
+		return 0, fmt.Errorf("parse etime %q: implausible day count", s)
+	}
 
 	parts := strings.Split(rest, ":")
 	if len(parts) < 2 || len(parts) > 3 {
 		return 0, fmt.Errorf("parse etime %q: unexpected format", s)
 	}
 	// Each part is a base-60 digit group: mm:ss, or hh:mm:ss when 3 parts.
+	// Minutes and seconds must be < 60; hours are bounded by the day guard.
 	var total int64
-	for _, p := range parts {
+	for i, p := range parts {
 		n, err := strconv.ParseInt(p, 10, 64)
 		if err != nil {
 			return 0, fmt.Errorf("parse etime %q: %w", s, err)
+		}
+		if n < 0 || (i > 0 && n > 59) || (i == 0 && len(parts) == 2 && n > 59) || n > 9999 {
+			return 0, fmt.Errorf("parse etime %q: field out of range", s)
 		}
 		total = total*60 + n
 	}

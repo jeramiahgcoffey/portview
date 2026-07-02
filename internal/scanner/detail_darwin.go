@@ -7,7 +7,14 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// processUptime reports no override on macOS: `ps etime` is reliable here, so
+// Inspect keeps the value it already parsed. (Linux overrides it from /proc.)
+func processUptime(_ context.Context, _ int) (time.Duration, bool) {
+	return 0, false
+}
 
 // processCWD returns pid's working directory via lsof. Empty on any failure —
 // the insight pane simply omits the row.

@@ -35,7 +35,13 @@ func TestParseEtime(t *testing.T) {
 }
 
 func TestParseEtimeRejectsGarbage(t *testing.T) {
-	for _, in := range []string{"", "x", "42", "1:2:3:4", "a-01:02:03", "1:xx"} {
+	for _, in := range []string{
+		"", "x", "42", "1:2:3:4", "a-01:02:03", "1:xx",
+		"99:99",           // minutes/seconds must be < 60
+		"01:99:00",        // out-of-range minutes
+		"191510-00:00:42", // implausible day count (clock-skewed hosts report centuries)
+		"-01:02:03",       // negative
+	} {
 		if _, err := parseEtime(in); err == nil {
 			t.Errorf("parseEtime(%q): expected error, got none", in)
 		}
@@ -61,6 +67,56 @@ func TestParsePSDetailRejectsGarbage(t *testing.T) {
 		if _, err := parsePSDetail(in); err == nil {
 			t.Errorf("parsePSDetail(%q): expected error, got none", in)
 		}
+	}
+}
+
+// A nonsense etime (clock-skewed host) must not fail the inspection — uptime
+// degrades to zero and the remaining fields survive.
+func TestParsePSDetailToleratesGarbageEtime(t *testing.T) {
+	d, err := parsePSDetail("191510-00:00:42 0.3 1.2 54321")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if d.Uptime != 0 {
+		t.Errorf("Uptime = %v, want 0 (unknown)", d.Uptime)
+	}
+	if d.RSSKB != 54321 {
+		t.Errorf("RSSKB = %d, want 54321", d.RSSKB)
+	}
+}
+
+func TestParseProcUptime(t *testing.T) {
+	secs, err := parseProcUptime([]byte("35045.12 137941.61\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if secs != 35045.12 {
+		t.Errorf("secs = %v, want 35045.12", secs)
+	}
+	if _, err := parseProcUptime([]byte("")); err == nil {
+		t.Error("empty input: expected error")
+	}
+	if _, err := parseProcUptime([]byte("abc")); err == nil {
+		t.Error("non-numeric input: expected error")
+	}
+}
+
+func TestParseStatStartTicks(t *testing.T) {
+	// Real-shaped /proc/pid/stat line; comm "(a) b" contains a space and a
+	// paren to exercise the last-')' scan. starttime (field 22) is 3389.
+	stat := []byte("1234 ((a) b) S 1 1234 1234 0 -1 4194560 1000 0 0 0 10 5 0 0 20 0 8 0 3389 1000000 500 18446744073709551615")
+	ticks, err := parseStatStartTicks(stat)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ticks != 3389 {
+		t.Errorf("ticks = %d, want 3389", ticks)
+	}
+	if _, err := parseStatStartTicks([]byte("no paren here")); err == nil {
+		t.Error("missing ')': expected error")
+	}
+	if _, err := parseStatStartTicks([]byte("1 (x) S 2 3")); err == nil {
+		t.Error("short line: expected error")
 	}
 }
 
