@@ -13,7 +13,7 @@ Output docs/demo.gif
 Set Shell "bash"
 Set FontSize 16
 Set Width 1100
-Set Height 250
+Set Height 320
 Set Padding 20
 Set Theme "Dracula"
 Set TypingSpeed 60ms
@@ -54,6 +54,12 @@ Sleep 400ms
 Enter
 Sleep 1200ms
 
+# insight pane: cwd, uptime, cpu/mem, live HTTP probe
+Type "i"
+Sleep 2500ms
+Escape
+Sleep 800ms
+
 # live filter
 Type "/"
 Sleep 500ms
@@ -70,7 +76,14 @@ Sleep 700ms
 
 # quit
 Type "q"
-Sleep 1200ms
+Sleep 800ms
+
+# CLI mode: same data, scriptable
+Type "clear" Enter
+Type "/tmp/portview-demo list"
+Sleep 600ms
+Enter
+Sleep 2500ms
 
 # --- cleanup (hidden) ---
 Hide

@@ -6,7 +6,9 @@
 
 A lightweight terminal UI for discovering and managing the dev servers listening
 on your machine. It auto-discovers TCP servers on localhost, shows the process
-that owns each port, and lets you open, kill, label, and filter them.
+that owns each port, and lets you open, inspect, kill, label, and filter them.
+Docker-published ports resolve to their container, and every action is also
+available as a plain CLI subcommand for scripting.
 
 No more `lsof -i -P | grep LISTEN` or trying to remember which port your frontend
 is on.
@@ -58,19 +60,60 @@ yellow.
 
 ### Keybindings
 
-| Key            | Action                                   |
-| -------------- | ---------------------------------------- |
-| `↑`/`↓`, `j`/`k` | Navigate the list                      |
-| `o`, `Enter`   | Open `localhost:<port>` in your browser  |
-| `x`            | Kill the process (with y/n confirmation) |
-| `l`            | Set or edit the label for the port       |
-| `r`            | Force an immediate refresh               |
-| `/`            | Filter by port, process, or label        |
-| `?`            | Toggle the help overlay                  |
-| `q`, `Ctrl+C`  | Quit                                     |
+| Key            | Action                                    |
+| -------------- | ----------------------------------------- |
+| `↑`/`↓`, `j`/`k` | Navigate the list                       |
+| `o`, `Enter`   | Open `localhost:<port>` in your browser   |
+| `i`            | Inspect the selected server (insight pane) |
+| `x`            | Kill the process (with y/n confirmation)  |
+| `l`            | Set or edit the label for the port        |
+| `r`            | Force an immediate refresh                |
+| `/`            | Filter by port, process, label, or container |
+| `?`            | Toggle the help overlay                   |
+| `q`, `Ctrl+C`  | Quit                                      |
 
 > The design doc binds `k` to both navigation and kill; portview uses `x` for
 > kill so `j`/`k` remain vim-style navigation.
+
+### Insight pane
+
+Press `i` on any server to see what it actually is:
+
+- **cwd** — the working directory of the process, i.e. which project owns the port
+- **uptime**, **cpu/mem**, and resident memory
+- **http** — a one-shot HTTP probe: status code, latency, and `Server` header
+  (probes run only on demand, never during the background poll)
+
+Inside the pane: `r` re-inspects, `o` opens the browser, `esc`/`i` goes back.
+
+### Docker containers
+
+Ports published by a container normally show up as an opaque proxy process
+(`com.docker.backend` on macOS, `docker-proxy` on Linux, `OrbStack Helper`
+with OrbStack). portview resolves them to the real container:
+
+- The list shows the **container name** and image instead of the proxy.
+- `x` runs `docker stop <container>` instead of signaling the proxy process —
+  SIGTERM on Docker's proxy would take down the whole daemon, not the container.
+- `/` filtering matches container names and images.
+
+Requires a working `docker` CLI; if it's missing, ports simply display as the
+proxy process.
+
+## CLI mode
+
+Every action works without the TUI, for scripts and aliases:
+
+```sh
+portview list            # table of listening servers
+portview list --json     # same, as JSON (labels, health, containers included)
+portview list --all      # include ports hidden by config
+portview kill 3000       # SIGTERM the process on :3000 (docker stop for containers)
+portview open 3000       # open localhost:3000 in the browser
+```
+
+`kill` exits non-zero when the port has no listener, so it composes with
+`&&`/`||` in scripts.
 
 ## Configuration
 
