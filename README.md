@@ -151,8 +151,11 @@ hidden:
 | macOS    | `lsof` + `ps`                            |
 | Linux    | `/proc/net/tcp` + `/proc/{pid}` lookups  |
 
-Windows is not supported in v0.1. Without elevated privileges, ports owned by
+Windows is not supported yet. Without elevated privileges, ports owned by
 other users may appear without process details (same as unprivileged `lsof`).
+
+Docker containers are discovered through the `docker` CLI, so container names
+and images appear on both macOS (Docker Desktop / OrbStack) and Linux.
 
 ## Contributing
 
