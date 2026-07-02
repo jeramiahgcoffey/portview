@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/jeramiahgcoffey/portview/internal/scanner"
 )
@@ -77,5 +78,35 @@ func TestEnrichNoDockerProcesses(t *testing.T) {
 	got := Enrich(context.Background(), in)
 	if !reflect.DeepEqual(got, in) {
 		t.Errorf("Enrich changed non-docker servers: %+v", got)
+	}
+}
+
+func TestWithTimeoutPreservesCallerDeadline(t *testing.T) {
+	parent, cancelParent := context.WithTimeout(context.Background(), time.Hour)
+	defer cancelParent()
+
+	ctx, cancel := withTimeout(parent, 5*time.Second)
+	defer cancel()
+
+	dl, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("expected a deadline")
+	}
+	// The caller's far-out deadline must win, not the 5s fallback.
+	if time.Until(dl) < 30*time.Minute {
+		t.Errorf("deadline %v is too soon; caller's deadline should be preserved", dl)
+	}
+}
+
+func TestWithTimeoutAppliesFallback(t *testing.T) {
+	ctx, cancel := withTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	dl, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("expected a fallback deadline")
+	}
+	if d := time.Until(dl); d <= 0 || d > 5*time.Second {
+		t.Errorf("fallback deadline %v out of expected (0, 5s] range", d)
 	}
 }

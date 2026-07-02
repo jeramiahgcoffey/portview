@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/jeramiahgcoffey/portview/internal/scanner"
 )
 
 // Defaults mirror the scanner defaults from the design doc.
@@ -137,6 +139,22 @@ func (c Config) SaveTo(path string) error {
 		return fmt.Errorf("config: write %s: %w", path, err)
 	}
 	return nil
+}
+
+// Decorate applies the config to a freshly scanned server list: it drops
+// hidden ports (unless includeHidden) and attaches each server's saved label.
+// It is the single merge point shared by the TUI and CLI so their filtering
+// behavior cannot drift apart.
+func (c Config) Decorate(servers []scanner.Server, includeHidden bool) []scanner.Server {
+	out := make([]scanner.Server, 0, len(servers))
+	for _, s := range servers {
+		if !includeHidden && c.IsHidden(s.Port) {
+			continue
+		}
+		s.Label = c.LabelFor(s.Port)
+		out = append(out, s)
+	}
+	return out
 }
 
 // LabelFor returns the user label for a port, or "" if none is set.

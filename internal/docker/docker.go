@@ -13,9 +13,31 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jeramiahgcoffey/portview/internal/scanner"
 )
+
+// Fallback timeouts applied when the caller supplies no deadline. This package
+// owns the external-process boundary, so it defends against an unresponsive
+// daemon rather than trusting every caller to remember a timeout.
+//
+// The read path (docker ps) should return promptly. `docker stop` legitimately
+// blocks on the container's stop grace period (10s by default), so its bound is
+// generous enough not to cancel a stop that is working.
+const (
+	queryTimeout = 5 * time.Second
+	stopTimeout  = 30 * time.Second
+)
+
+// withTimeout returns ctx unchanged when it already carries a deadline, or a
+// child bounded by d otherwise. The returned cancel is always safe to defer.
+func withTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, d)
+}
 
 // Container identifies a running container that publishes one or more host ports.
 type Container struct {
@@ -83,6 +105,8 @@ func PortMap(ctx context.Context) (map[int]Container, error) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return nil, err
 	}
+	ctx, cancel := withTimeout(ctx, queryTimeout)
+	defer cancel()
 	out, err := exec.CommandContext(ctx, "docker", "ps", "--format", "{{json .}}").Output()
 	if err != nil {
 		return nil, fmt.Errorf("docker ps: %w", err)
@@ -146,6 +170,8 @@ func Stop(ctx context.Context, nameOrID string) error {
 	if nameOrID == "" {
 		return fmt.Errorf("docker: empty container name")
 	}
+	ctx, cancel := withTimeout(ctx, stopTimeout)
+	defer cancel()
 	if out, err := exec.CommandContext(ctx, "docker", "stop", nameOrID).CombinedOutput(); err != nil {
 		return fmt.Errorf("docker stop %s: %s", nameOrID, strings.TrimSpace(string(out)))
 	}

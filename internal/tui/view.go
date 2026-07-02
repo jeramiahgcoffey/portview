@@ -304,7 +304,10 @@ func formatProbe(p scanner.HTTPProbe) string {
 	}
 	out := fmt.Sprintf("%d · %s", p.Status, p.Latency.Round(time.Millisecond))
 	if p.Server != "" {
-		out += " · " + p.Server
+		// Cap the Server header: it comes off an arbitrary local response and
+		// this string is rendered pre-styled (kvStyled skips truncation), so an
+		// overlong value would otherwise blow out the pane width.
+		out += " · " + truncate(p.Server, 40)
 	}
 	if p.Status >= 200 && p.Status < 400 {
 		return healthyStyle.Render(out)

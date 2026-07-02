@@ -35,10 +35,19 @@ type HTTPProbe struct {
 // DefaultProbeTimeout bounds the on-demand HTTP probe.
 const DefaultProbeTimeout = 2 * time.Second
 
+// DefaultInspectTimeout bounds the on-demand process inspection when the caller
+// supplies no deadline, so a stuck ps/lsof can't hang the insight pane forever.
+const DefaultInspectTimeout = 2 * time.Second
+
 // Inspect returns process insight for pid. The cwd lookup is platform-specific
 // (see detail_darwin.go / detail_linux.go); the rest comes from ps, which
 // speaks the same dialect on macOS and Linux for these columns.
 func Inspect(ctx context.Context, pid int) (Detail, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, DefaultInspectTimeout)
+		defer cancel()
+	}
 	d, err := psDetail(ctx, pid)
 	if err != nil {
 		return Detail{}, err

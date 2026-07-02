@@ -131,6 +131,19 @@ func TestDockerKillPromptSaysStopContainer(t *testing.T) {
 	}
 }
 
+func TestFormatProbeTruncatesLongServerHeader(t *testing.T) {
+	long := strings.Repeat("x", 200)
+	out := formatProbe(scanner.HTTPProbe{OK: true, Status: 200, Latency: time.Millisecond, Server: long})
+	// The rendered string carries ANSI codes; strip them by checking the raw
+	// 200-char run does not survive intact (truncate caps Server at 40).
+	if strings.Contains(out, long) {
+		t.Errorf("formatProbe did not cap an overlong Server header:\n%s", out)
+	}
+	if !strings.Contains(out, "…") {
+		t.Errorf("expected ellipsis from truncation, got:\n%s", out)
+	}
+}
+
 func TestFilterMatchesContainerAndImage(t *testing.T) {
 	s := scanner.Server{Port: 5432, Process: "com.docker.backend", Container: "my-postgres", Image: "postgres:16"}
 	if !matchesFilter(s, "my-post") {

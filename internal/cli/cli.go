@@ -11,6 +11,7 @@ import (
 	"io"
 	"strconv"
 	"text/tabwriter"
+	"time"
 
 	"github.com/jeramiahgcoffey/portview/internal/action"
 	"github.com/jeramiahgcoffey/portview/internal/config"
@@ -64,9 +65,16 @@ func Run(args []string, version string, stdout, stderr io.Writer) int {
 	}
 }
 
+// scanTimeout bounds a CLI discovery pass. The CLI is meant to be scriptable,
+// so an unresponsive lsof/proc or docker daemon must not hang it forever.
+const scanTimeout = 10 * time.Second
+
 // scan runs one full discovery pass with the user's config applied: platform
 // scan, docker enrichment, then hidden-port filtering and labels (unless all).
 func scan(ctx context.Context, all bool) ([]scanner.Server, error) {
+	ctx, cancel := context.WithTimeout(ctx, scanTimeout)
+	defer cancel()
+
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
@@ -77,16 +85,7 @@ func scan(ctx context.Context, all bool) ([]scanner.Server, error) {
 		return nil, err
 	}
 	servers = docker.Enrich(ctx, servers)
-
-	out := make([]scanner.Server, 0, len(servers))
-	for _, sv := range servers {
-		if !all && cfg.IsHidden(sv.Port) {
-			continue
-		}
-		sv.Label = cfg.LabelFor(sv.Port)
-		out = append(out, sv)
-	}
-	return out, nil
+	return cfg.Decorate(servers, all), nil
 }
 
 func runList(args []string, stdout, stderr io.Writer) int {

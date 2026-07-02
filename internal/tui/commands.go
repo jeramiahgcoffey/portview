@@ -113,15 +113,8 @@ func inspectCmd(s scanner.Server) tea.Cmd {
 }
 
 // applyConfig is the app-logic merge step: drop hidden ports and attach the
-// user's saved label to each remaining server.
+// user's saved label to each remaining server. It delegates to config.Decorate
+// so the TUI and CLI share one filtering implementation.
 func applyConfig(in []scanner.Server, cfg config.Config) []scanner.Server {
-	out := make([]scanner.Server, 0, len(in))
-	for _, s := range in {
-		if cfg.IsHidden(s.Port) {
-			continue
-		}
-		s.Label = cfg.LabelFor(s.Port)
-		out = append(out, s)
-	}
-	return out
+	return cfg.Decorate(in, false)
 }

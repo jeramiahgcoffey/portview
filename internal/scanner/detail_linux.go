@@ -20,7 +20,12 @@ func processCWD(_ context.Context, pid int) string {
 }
 
 // linuxClockTick is the kernel USER_HZ constant that /proc stat times are
-// reported in. It is fixed at 100 on Linux (sysconf(_SC_CLK_TCK)).
+// reported in. Reading the real value needs sysconf(_SC_CLK_TCK), which in Go
+// requires cgo — and a cgo dependency would break portview's static
+// cross-compiled single-binary builds. USER_HZ is 100 on every architecture
+// portview releases for (linux/amd64, linux/arm64) and on all modern arches
+// generally, so the constant is a deliberate trade of exotic-arch precision
+// for a dependency-free binary.
 const linuxClockTick = 100
 
 // processUptime computes pid's age from /proc/uptime and the starttime field
