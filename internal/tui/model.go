@@ -25,6 +25,7 @@ const (
 	modeConfirmKill             // awaiting y/n to kill a process
 	modeLabel                   // editing a label inline
 	modeFilter                  // typing a live filter
+	modeDetail                  // insight pane for the selected server
 )
 
 // Model is the Bubble Tea model for portview.
@@ -47,6 +48,12 @@ type Model struct {
 	filter      string          // active filter query (persists after Enter)
 	showHelp    bool            // full help overlay visible
 	status      string          // transient feedback line
+
+	detailTarget  scanner.Server    // server shown in the insight pane
+	detail        scanner.Detail    // process insight for detailTarget
+	detailProbe   scanner.HTTPProbe // HTTP probe result for detailTarget
+	detailErr     error             // inspect failure, if any
+	detailLoading bool              // true while inspectCmd is in flight
 
 	width  int
 	height int
@@ -118,9 +125,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "kill failed: " + msg.err.Error()
 			return m, nil
 		}
-		m.status = "sent SIGTERM to PID " + strconv.Itoa(msg.pid)
+		m.status = msg.desc
 		// Refresh immediately so the killed server drops out of the list.
 		return m, scanCmd(m.scanner, m.cfg)
+
+	case detailResultMsg:
+		// Ignore stale results if the pane moved on to another server.
+		if m.mode == modeDetail && msg.port == m.detailTarget.Port {
+			m.detail = msg.detail
+			m.detailProbe = msg.probe
+			m.detailErr = msg.err
+			m.detailLoading = false
+		}
+		return m, nil
 
 	case saveResultMsg:
 		if msg.err != nil {
@@ -140,6 +157,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleLabel(msg)
 		case modeFilter:
 			return m.handleFilter(msg)
+		case modeDetail:
+			return m.handleDetail(msg)
 		default:
 			return m.handleNormal(msg)
 		}
@@ -189,6 +208,16 @@ func (m Model) handleNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case key.Matches(msg, m.keys.Inspect):
+		if s, ok := m.selected(); ok {
+			m.mode = modeDetail
+			m.detailTarget = s
+			m.detailLoading = true
+			m.detailErr = nil
+			return m, inspectCmd(s)
+		}
+		return m, nil
+
 	case key.Matches(msg, m.keys.Kill):
 		if s, ok := m.selected(); ok {
 			m.mode = modeConfirmKill
@@ -229,12 +258,32 @@ func (m Model) handleNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleConfirmKill(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
-		pid := m.killTarget.PID
+		target := m.killTarget
 		m.mode = modeNormal
-		return m, killCmd(pid)
+		return m, killCmd(target)
 	case "n", "N", "esc", "q":
 		m.mode = modeNormal
 		m.status = "kill cancelled"
+		return m, nil
+	}
+	return m, nil
+}
+
+// handleDetail processes keys while the insight pane is open.
+func (m Model) handleDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Quit):
+		return m, tea.Quit
+
+	case key.Matches(msg, m.keys.Refresh):
+		m.detailLoading = true
+		return m, inspectCmd(m.detailTarget)
+
+	case key.Matches(msg, m.keys.Open):
+		return m, openCmd(m.detailTarget.Port)
+
+	case key.Matches(msg, m.keys.Inspect), msg.Type == tea.KeyEsc:
+		m.mode = modeNormal
 		return m, nil
 	}
 	return m, nil
@@ -308,12 +357,14 @@ func (m Model) visibleServers() []scanner.Server {
 	return out
 }
 
-// matchesFilter reports whether a server matches a lowercased query against its
-// port, process name, or label.
+// matchesFilter reports whether a server matches a lowercased query against
+// its port, process name, label, or docker container/image.
 func matchesFilter(s scanner.Server, q string) bool {
 	return strings.Contains(strconv.Itoa(s.Port), q) ||
 		strings.Contains(strings.ToLower(s.Process), q) ||
-		strings.Contains(strings.ToLower(s.Label), q)
+		strings.Contains(strings.ToLower(s.Label), q) ||
+		strings.Contains(strings.ToLower(s.Container), q) ||
+		strings.Contains(strings.ToLower(s.Image), q)
 }
 
 // moveCursor moves the selection by delta, clamped to the visible list.

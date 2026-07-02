@@ -13,13 +13,15 @@ import (
 
 // Server describes a single discovered listening server.
 type Server struct {
-	Port    int    // TCP port number
-	PID     int    // OS process ID
-	Process string // Short process name (e.g., "node", "python3", "go")
-	Command string // Full command line (e.g., "node server.js")
-	State   string // TCP state, typically "LISTEN"
-	Label   string // User-assigned label from config (e.g., "frontend")
-	Healthy bool   // True if port responds to TCP connect
+	Port      int    `json:"port"`                // TCP port number
+	PID       int    `json:"pid"`                 // OS process ID
+	Process   string `json:"process"`             // Short process name (e.g., "node", "python3", "go")
+	Command   string `json:"command"`             // Full command line (e.g., "node server.js")
+	State     string `json:"state"`               // TCP state, typically "LISTEN"
+	Label     string `json:"label,omitempty"`     // User-assigned label from config (e.g., "frontend")
+	Healthy   bool   `json:"healthy"`             // True if port responds to TCP connect
+	Container string `json:"container,omitempty"` // Docker container name, when the port is published by one
+	Image     string `json:"image,omitempty"`     // Docker image for Container
 }
 
 // Scanner discovers listening servers. Implementations are platform-specific.

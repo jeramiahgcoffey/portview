@@ -8,6 +8,7 @@ type keyMap struct {
 	Up      key.Binding
 	Down    key.Binding
 	Open    key.Binding
+	Inspect key.Binding
 	Kill    key.Binding
 	Label   key.Binding
 	Refresh key.Binding
@@ -30,6 +31,10 @@ func defaultKeys() keyMap {
 		Open: key.NewBinding(
 			key.WithKeys("o", "enter"),
 			key.WithHelp("o", "open"),
+		),
+		Inspect: key.NewBinding(
+			key.WithKeys("i"),
+			key.WithHelp("i", "inspect"),
 		),
 		Kill: key.NewBinding(
 			key.WithKeys("x"),
@@ -60,14 +65,14 @@ func defaultKeys() keyMap {
 
 // ShortHelp implements help.KeyMap.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Open, k.Kill, k.Label, k.Refresh, k.Filter, k.Help, k.Quit}
+	return []key.Binding{k.Open, k.Inspect, k.Kill, k.Label, k.Refresh, k.Filter, k.Help, k.Quit}
 }
 
 // FullHelp implements help.KeyMap.
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down},
-		{k.Open, k.Kill, k.Label},
+		{k.Open, k.Inspect, k.Kill, k.Label},
 		{k.Refresh, k.Filter},
 		{k.Help, k.Quit},
 	}

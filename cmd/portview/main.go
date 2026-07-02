@@ -1,13 +1,16 @@
-// Command portview is a TUI for discovering and managing localhost dev servers.
+// Command portview is a TUI for discovering and managing localhost dev
+// servers, with non-TUI subcommands (list, kill, open) for scripting.
 package main
 
 import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jeramiahgcoffey/portview/internal/cli"
 	"github.com/jeramiahgcoffey/portview/internal/config"
 	"github.com/jeramiahgcoffey/portview/internal/scanner"
 	"github.com/jeramiahgcoffey/portview/internal/tui"
@@ -17,6 +20,11 @@ import (
 var version = "dev"
 
 func main() {
+	args := os.Args[1:]
+	if len(args) > 0 && slices.Contains(cli.Commands, args[0]) {
+		os.Exit(cli.Run(args, version, os.Stdout, os.Stderr))
+	}
+
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 

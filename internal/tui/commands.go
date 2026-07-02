@@ -2,16 +2,14 @@ package tui
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"os/exec"
-	"runtime"
-	"syscall"
+	"strconv"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jeramiahgcoffey/portview/internal/action"
 	"github.com/jeramiahgcoffey/portview/internal/config"
+	"github.com/jeramiahgcoffey/portview/internal/docker"
 	"github.com/jeramiahgcoffey/portview/internal/scanner"
 )
 
@@ -31,10 +29,12 @@ type openResultMsg struct {
 	err  error
 }
 
-// killResultMsg reports the outcome of signaling a process.
+// killResultMsg reports the outcome of terminating a server — either a
+// SIGTERM to a process or a docker stop. desc describes what was done, for
+// the status line.
 type killResultMsg struct {
-	pid int
-	err error
+	desc string
+	err  error
 }
 
 // saveResultMsg reports the outcome of persisting config.
@@ -42,12 +42,23 @@ type saveResultMsg struct {
 	err error
 }
 
-// scanCmd runs a single scan and merges config (hidden filter + labels) into
-// the result. It is fired both by the poll ticker and by manual refresh.
+// detailResultMsg carries the on-demand insight for one server.
+type detailResultMsg struct {
+	port   int
+	detail scanner.Detail
+	probe  scanner.HTTPProbe
+	err    error
+}
+
+// scanCmd runs a single scan, resolves docker containers, and merges config
+// (hidden filter + labels) into the result. It is fired both by the poll
+// ticker and by manual refresh.
 func scanCmd(s scanner.Scanner, cfg config.Config) tea.Cmd {
 	return func() tea.Msg {
-		servers, err := s.Scan(context.Background())
+		ctx := context.Background()
+		servers, err := s.Scan(ctx)
 		if err == nil {
+			servers = docker.Enrich(ctx, servers)
 			servers = applyConfig(servers, cfg)
 		}
 		return scanResultMsg{servers: servers, err: err, at: time.Now()}
@@ -64,15 +75,21 @@ func tickCmd(d time.Duration) tea.Cmd {
 // openCmd opens http://localhost:<port> in the default browser.
 func openCmd(port int) tea.Cmd {
 	return func() tea.Msg {
-		err := browserOpen(fmt.Sprintf("http://localhost:%d", port))
-		return openResultMsg{port: port, err: err}
+		return openResultMsg{port: port, err: action.OpenBrowser(port)}
 	}
 }
 
-// killCmd sends SIGTERM to a process.
-func killCmd(pid int) tea.Cmd {
+// killCmd terminates a server: docker stop when it is a container-published
+// port (SIGTERM to Docker's proxy would take down the daemon, not the
+// container), SIGTERM to the owning process otherwise.
+func killCmd(target scanner.Server) tea.Cmd {
 	return func() tea.Msg {
-		return killResultMsg{pid: pid, err: killProcess(pid)}
+		if target.Container != "" {
+			err := docker.Stop(context.Background(), target.Container)
+			return killResultMsg{desc: "stopped container " + target.Container, err: err}
+		}
+		err := action.Kill(target.PID)
+		return killResultMsg{desc: "sent SIGTERM to PID " + strconv.Itoa(target.PID), err: err}
 	}
 }
 
@@ -80,6 +97,18 @@ func killCmd(pid int) tea.Cmd {
 func saveCmd(cfg config.Config) tea.Cmd {
 	return func() tea.Msg {
 		return saveResultMsg{err: cfg.Save()}
+	}
+}
+
+// inspectCmd gathers the insight pane's data for one server: process detail
+// via the scanner and a one-shot HTTP probe of the port. Both are on-demand
+// only — the poll loop never runs them.
+func inspectCmd(s scanner.Server) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		detail, err := scanner.Inspect(ctx, s.PID)
+		probe := scanner.ProbeHTTP(ctx, s.Port, scanner.DefaultProbeTimeout)
+		return detailResultMsg{port: s.Port, detail: detail, probe: probe, err: err}
 	}
 }
 
@@ -95,27 +124,4 @@ func applyConfig(in []scanner.Server, cfg config.Config) []scanner.Server {
 		out = append(out, s)
 	}
 	return out
-}
-
-// browserOpen launches the platform's default URL opener. Opening a browser is
-// an app action, not port discovery, so a runtime OS switch is appropriate
-// here (the platform abstraction lives in the scanner layer).
-func browserOpen(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	return cmd.Start()
-}
-
-// killProcess sends a graceful termination signal to pid.
-func killProcess(pid int) error {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-	return p.Signal(syscall.SIGTERM)
 }
