@@ -296,6 +296,13 @@ hidden:
 
 - Windows support via `netstat` backend
 - Log tailing for selected processes
-- Docker container discovery alongside native processes
+- ~~Docker container discovery alongside native processes~~ — shipped in v0.2
 - Configurable color themes
 - Mouse support
+
+> **v0.2 (2026-07-02):** shipped an insight pane (per-process cwd, uptime,
+> cpu/mem, on-demand HTTP probe), Docker/OrbStack container discovery
+> (container name in the list, `docker stop` in place of a proxy SIGTERM), and
+> non-TUI CLI subcommands (`list`/`kill`/`open`, with `list --json`). The
+> original layered architecture held: discovery stayed behind the scanner
+> boundary, and a new `internal/docker` package sits beside it for enrichment.
