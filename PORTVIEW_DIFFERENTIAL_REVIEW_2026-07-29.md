@@ -14,7 +14,7 @@
 
 **Key Metrics:**
 
-- Files analyzed: 22/22 final changed files (100%)
+- Files analyzed: 23/23 final changed files (100%)
 - Production Go files analyzed: 8/8 (100%)
 - Changed-function test gaps: 0 blocking gaps
 - High-blast-radius changes: 0
@@ -30,7 +30,7 @@ unchanged, and the default CLI table/JSON shapes remain backward-compatible.
 ## What Changed
 
 **Baseline:** `79d78e2` (`v0.2.0`, `origin/main`)
-**Reviewed state:** working tree based on `79d78e2`
+**Reviewed state:** PR #7 merge tree `fe01e74` (feature head `aed5a13`)
 **Timeline:** 2026-07-28 to 2026-07-29
 
 | Area | Files | Risk | Blast radius |
@@ -233,9 +233,12 @@ logic, release credentials, or remote network discovery code changed.
 **Remote review:**
 
 - CodeRabbit's GitHub review completed against the initial PR head and its
-  three actionable comments were independently verified and fixed.
-- GitHub CI passed on Linux, macOS, and lint before the review follow-up; the
-  follow-up commit requires the same green gate before merge.
+  three actionable comments were independently verified, fixed, and marked
+  addressed in `aed5a13`.
+- An incremental CodeRabbit review was requested for `aed5a13`, but its plan
+  quota prevented a second scan; no follow-up CodeRabbit verdict is claimed.
+- Exact-head GitHub CI run 21 passed Linux, macOS, integration, and lint before
+  merge.
 - Tag-triggered release workflow results remain pending release publication.
 
 **Confidence:** HIGH for the reviewed local diff.
