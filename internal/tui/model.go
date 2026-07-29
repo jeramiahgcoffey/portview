@@ -34,20 +34,23 @@ type Model struct {
 	cfg     config.Config
 	keys    keyMap
 	help    help.Model
+	saver   *configSaver
 
-	servers  []scanner.Server // full decorated list (post hidden-filter + labels)
-	cursor   int              // index into the visible (filtered) list
-	lastScan time.Time
-	scanErr  error
+	servers    []scanner.Server // full decorated list, including hidden listeners
+	cursor     int              // index into the visible (visibility + text-filtered) list
+	lastScan   time.Time
+	scanErr    error
+	showHidden bool // whether configured hidden listeners are visible
 
-	mode        mode
-	killTarget  scanner.Server  // process awaiting kill confirmation
-	editPort    int             // port whose label is being edited
-	labelInput  textinput.Model // inline label editor
-	filterInput textinput.Model // live filter input
-	filter      string          // active filter query (persists after Enter)
-	showHelp    bool            // full help overlay visible
-	status      string          // transient feedback line
+	mode           mode
+	killTarget     scanner.Server  // process awaiting kill confirmation
+	editPort       int             // port whose label is being edited
+	labelInput     textinput.Model // inline label editor
+	filterInput    textinput.Model // live filter input
+	filter         string          // active filter query (persists after Enter)
+	showHelp       bool            // full help overlay visible
+	status         string          // transient feedback line
+	configRevision uint64          // latest locally scheduled config edit
 
 	detailTarget  scanner.Server    // server shown in the insight pane
 	detail        scanner.Detail    // process insight for detailTarget
@@ -74,6 +77,7 @@ func New(s scanner.Scanner, cfg config.Config) Model {
 		cfg:         cfg,
 		keys:        defaultKeys(),
 		help:        help.New(),
+		saver:       &configSaver{},
 		labelInput:  label,
 		filterInput: filter,
 	}
@@ -82,7 +86,7 @@ func New(s scanner.Scanner, cfg config.Config) Model {
 // Init kicks off the first scan and starts the poll-loop ticker.
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		scanCmd(m.scanner, m.cfg),
+		scanCmd(m.scanner),
 		tickCmd(m.cfg.RefreshInterval.Std()),
 	)
 }
@@ -99,14 +103,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		return m, tea.Batch(
-			scanCmd(m.scanner, m.cfg),
+			scanCmd(m.scanner),
 			tickCmd(m.cfg.RefreshInterval.Std()),
 		)
 
 	case scanResultMsg:
 		m.scanErr = msg.err
 		if msg.err == nil {
-			m.servers = msg.servers
+			// Decorate at receipt time with the model's current config. A scan
+			// may have started before a label/hide edit; applying config here
+			// prevents its eventual result from reverting that newer edit.
+			m.servers = applyConfig(msg.servers, m.cfg)
 			m.lastScan = msg.at
 			m.clampCursor()
 		}
@@ -127,7 +134,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.status = msg.desc
 		// Refresh immediately so the killed server drops out of the list.
-		return m, scanCmd(m.scanner, m.cfg)
+		return m, scanCmd(m.scanner)
 
 	case detailResultMsg:
 		// Ignore stale results if the pane moved on to another server.
@@ -141,7 +148,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case saveResultMsg:
 		if msg.err != nil {
-			m.status = "save failed: " + msg.err.Error()
+			if msg.revision >= m.configRevision {
+				m.status = "save failed: " + msg.err.Error()
+			}
+			return m, nil
+		}
+		if msg.hasConfig && msg.revision >= m.configRevision {
+			// The locked transaction may have merged edits from another CLI or
+			// TUI process. Adopt that latest state without letting an older
+			// asynchronous result overwrite a newer local edit.
+			m.cfg = msg.cfg
+			m.servers = applyConfig(m.servers, m.cfg)
+			m.clampCursor()
 		}
 		return m, nil
 
@@ -200,7 +218,7 @@ func (m Model) handleNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, m.keys.Refresh):
 		m.status = ""
-		return m, scanCmd(m.scanner, m.cfg)
+		return m, scanCmd(m.scanner)
 
 	case key.Matches(msg, m.keys.Open):
 		if s, ok := m.selected(); ok {
@@ -232,6 +250,42 @@ func (m Model) handleNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.labelInput.SetValue(s.Label)
 			m.labelInput.CursorEnd()
 			m.labelInput.Focus()
+		}
+		return m, nil
+
+	case key.Matches(msg, m.keys.Hide):
+		if s, ok := m.selected(); ok {
+			var edit configEdit
+			if s.Hidden {
+				m.cfg.Unhide(s.Port)
+				m.status = "unhid :" + strconv.Itoa(s.Port)
+				edit = hideEdit(s.Port, false)
+			} else {
+				m.cfg.Hide(s.Port)
+				m.status = "hid :" + strconv.Itoa(s.Port) + " · press a to show hidden"
+				edit = hideEdit(s.Port, true)
+			}
+			m.servers = applyConfig(m.servers, m.cfg)
+			m.clampCursor()
+			cmd, revision := m.saver.command(edit)
+			m.configRevision = revision
+			return m, cmd
+		}
+		return m, nil
+
+	case key.Matches(msg, m.keys.All):
+		hidden := m.hiddenCount()
+		if hidden == 0 {
+			m.showHidden = false
+			m.status = "no hidden servers"
+			return m, nil
+		}
+		m.showHidden = !m.showHidden
+		m.clampCursor()
+		if m.showHidden {
+			m.status = "showing " + strconv.Itoa(hidden) + " hidden server" + plural(hidden)
+		} else {
+			m.status = "hidden servers concealed"
 		}
 		return m, nil
 
@@ -303,7 +357,13 @@ func (m Model) handleLabel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "labeled :" + strconv.Itoa(m.editPort) + " " + value
 		}
-		return m, saveCmd(m.cfg)
+		cmd, revision := m.saver.command(configEdit{
+			kind:  configEditLabel,
+			port:  m.editPort,
+			label: value,
+		})
+		m.configRevision = revision
+		return m, cmd
 
 	case tea.KeyEsc:
 		m.mode = modeNormal
@@ -342,19 +402,56 @@ func (m Model) handleFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// visibleServers returns the servers matching the active filter.
-func (m Model) visibleServers() []scanner.Server {
-	if m.filter == "" {
+// visibilityServers applies the persistent hidden-port preference while
+// retaining every listener in m.servers for the "show hidden" view.
+func (m Model) visibilityServers() []scanner.Server {
+	if m.showHidden {
 		return m.servers
 	}
-	q := strings.ToLower(m.filter)
 	out := make([]scanner.Server, 0, len(m.servers))
 	for _, s := range m.servers {
+		if !s.Hidden {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// visibleServers returns the visibility-filtered servers matching the active
+// text filter.
+func (m Model) visibleServers() []scanner.Server {
+	base := m.visibilityServers()
+	if m.filter == "" {
+		return base
+	}
+	q := strings.ToLower(m.filter)
+	out := make([]scanner.Server, 0, len(base))
+	for _, s := range base {
 		if matchesFilter(s, q) {
 			out = append(out, s)
 		}
 	}
 	return out
+}
+
+// hiddenCount returns the number of currently listening servers hidden by
+// config. Config may also contain stale hidden ports that are not listening;
+// those remain manageable through `portview hidden` / `portview unhide`.
+func (m Model) hiddenCount() int {
+	n := 0
+	for _, s := range m.servers {
+		if s.Hidden {
+			n++
+		}
+	}
+	return n
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // matchesFilter reports whether a server matches a lowercased query against

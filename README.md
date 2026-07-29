@@ -6,7 +6,8 @@
 
 A lightweight terminal UI for discovering and managing the dev servers listening
 on your machine. It auto-discovers TCP servers on localhost, shows the process
-that owns each port, and lets you open, inspect, kill, label, and filter them.
+that owns each port, and lets you open, inspect, kill, label, hide, and filter
+them.
 Docker-published ports resolve to their container, and every action is also
 available as a plain CLI subcommand for scripting.
 
@@ -24,7 +25,7 @@ is on.
 │   8080  go            go run main.go     backend    │
 ├─────────────────────────────────────────────────────┤
 │  4 servers · refreshed 1s ago                       │
-│  o:open  x:kill  l:label  r:refresh  /:filter  ?:help│
+│  o:open  x:kill  h:hide  a:hidden  /:filter  ?:help  │
 ╰─────────────────────────────────────────────────────╯
 ```
 
@@ -55,8 +56,8 @@ portview
 ```
 
 portview polls every few seconds and keeps the list current. Healthy ports
-(those that accept a TCP connection) are shown in green; unresponsive ones in
-yellow.
+(those that accept an IPv4 or IPv6 localhost connection) are shown in green;
+unresponsive ones in yellow.
 
 ### Keybindings
 
@@ -67,6 +68,8 @@ yellow.
 | `i`            | Inspect the selected server (insight pane) |
 | `x`            | Kill the process (with y/n confirmation)  |
 | `l`            | Set or edit the label for the port        |
+| `h`            | Hide the port, or unhide a revealed port  |
+| `a`            | Toggle configured hidden ports            |
 | `r`            | Force an immediate refresh                |
 | `/`            | Filter by port, process, label, or container |
 | `?`            | Toggle the help overlay                   |
@@ -85,6 +88,14 @@ Press `i` on any server to see what it actually is:
   (probes run only on demand, never during the background poll)
 
 Inside the pane: `r` re-inspects, `o` opens the browser, `esc`/`i` goes back.
+
+### Decluttering noisy listeners
+
+Press `h` to hide a selected listener such as a database or background system
+service. The choice is saved immediately and reused by the TUI and CLI. Press
+`a` to reveal hidden listeners; they carry an explicit `[hidden]` marker.
+Labeled rows use the compact `[h]` marker so the label still fits. Select a
+revealed listener and press `h` again to unhide it.
 
 ### Docker containers
 
@@ -107,9 +118,13 @@ Every action works without the TUI, for scripts and aliases:
 ```sh
 portview list            # table of listening servers
 portview list --json     # same, as JSON (labels, health, containers included)
-portview list --all      # include ports hidden by config
+portview list --all      # include ports hidden by config, marked HIDDEN/hidden
 portview kill 3000       # SIGTERM the process on :3000 (docker stop for containers)
 portview open 3000       # open localhost:3000 in the browser
+portview hide 5432       # hide a noisy listener from the default view
+portview unhide 5432     # restore it
+portview hidden          # list every configured hidden port, listening or not
+portview hidden --json   # scriptable hidden-port inventory
 ```
 
 `kill` exits non-zero when the port has no listener, so it composes with
@@ -138,8 +153,9 @@ hidden:
 ```
 
 - **labels** — persistent, port-based names shown in the LABEL column.
-- **hidden** — ports filtered out of the display (useful for noisy background
-  services).
+- **hidden** — ports filtered out of the default display (useful for noisy
+  background services). Manage them with `h`/`a` or the
+  `hide`/`unhide`/`hidden` CLI commands.
 - **port_range** — only ports in this inclusive range are scanned. Ports below
   1024 are skipped by default to avoid system-service noise.
 - **refresh_interval** — how often the list re-scans.
@@ -159,7 +175,8 @@ and images appear on both macOS (Docker Desktop / OrbStack) and Linux.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Issues and PRs welcome.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Release history is maintained in
+[CHANGELOG.md](CHANGELOG.md). Issues and PRs welcome.
 
 ## License
 

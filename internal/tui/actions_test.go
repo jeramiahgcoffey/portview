@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -116,6 +117,197 @@ func TestLabelEditEscCancels(t *testing.T) {
 	}
 	if m.cfg.LabelFor(3000) != "" {
 		t.Errorf("label = %q, want unchanged (cancelled)", m.cfg.LabelFor(3000))
+	}
+}
+
+func TestHideSelectedPersistsAndRemovesFromDefaultView(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := newModelWithServers() // cursor 0 -> port 3000
+
+	m, cmd := drive(m, runes("h"))
+	if !m.cfg.IsHidden(3000) {
+		t.Fatalf("config hidden = %v, want 3000", m.cfg.Hidden)
+	}
+	if !m.servers[0].Hidden {
+		t.Fatal("decorated server not marked hidden")
+	}
+	if len(m.visibleServers()) != 2 {
+		t.Fatalf("visible servers = %d, want 2 after hiding 3000", len(m.visibleServers()))
+	}
+	if cmd == nil {
+		t.Fatal("hide produced no save command")
+	}
+	_ = cmd()
+
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !loaded.IsHidden(3000) {
+		t.Fatalf("persisted hidden = %v, want 3000", loaded.Hidden)
+	}
+}
+
+func TestConfigSaverNewestRevisionWins(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	saver := &configSaver{}
+
+	staleCmd, _ := saver.command(hideEdit(3000, true))
+	latestCmd, _ := saver.command(hideEdit(3000, false))
+
+	// Execute in the worst possible order: newest first, then the stale command
+	// that would overwrite it without an ordered edit queue.
+	latestResult := latestCmd().(saveResultMsg)
+	if latestResult.err != nil {
+		t.Fatalf("latest save: %v", latestResult.err)
+	}
+	if !latestResult.hasConfig || latestResult.revision != 2 {
+		t.Fatalf("latest result = %+v, want persisted revision 2", latestResult)
+	}
+	staleResult := staleCmd().(saveResultMsg)
+	if staleResult.err != nil {
+		t.Fatalf("stale save: %v", staleResult.err)
+	}
+	if staleResult.hasConfig {
+		t.Fatalf("stale command persisted config: %+v", staleResult)
+	}
+
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.IsHidden(3000) {
+		t.Fatalf("stale save won: hidden = %v", loaded.Hidden)
+	}
+}
+
+func TestConfigSaverCapturesImmutableEdits(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	saver := &configSaver{}
+	_, _ = saver.command(hideEdit(3000, true))
+	label := "frontend"
+	cmd, _ := saver.command(configEdit{kind: configEditLabel, port: 3000, label: label})
+
+	// Changing the source variable after scheduling must not alter the queued
+	// value, and the later command must drain both queued edits.
+	label = "changed"
+	if label != "changed" {
+		t.Fatal("source label mutation failed")
+	}
+	result := cmd().(saveResultMsg)
+	if result.err != nil {
+		t.Fatalf("save: %v", result.err)
+	}
+
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !loaded.IsHidden(3000) || loaded.LabelFor(3000) != "frontend" {
+		t.Fatalf("saved snapshot = hidden %v, label %q; want hidden/frontend",
+			loaded.Hidden, loaded.LabelFor(3000))
+	}
+}
+
+func TestConfigSaverPreservesExternalChanges(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	saver := &configSaver{}
+	cmd, _ := saver.command(hideEdit(3000, true))
+
+	// Simulate another portview process updating the config after this TUI edit
+	// was scheduled but before its asynchronous command starts.
+	_, _, err := config.Update(func(cfg *config.Config) bool {
+		cfg.SetLabel(8080, "backend")
+		return true
+	})
+	if err != nil {
+		t.Fatalf("external update: %v", err)
+	}
+	result := cmd().(saveResultMsg)
+	if result.err != nil {
+		t.Fatalf("save: %v", result.err)
+	}
+
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !loaded.IsHidden(3000) || loaded.LabelFor(8080) != "backend" {
+		t.Fatalf("merged config = hidden %v labels %v; want 3000 and backend",
+			loaded.Hidden, loaded.Labels)
+	}
+}
+
+func TestModelIgnoresConfigResultOlderThanLocalEdit(t *testing.T) {
+	m := newModelWithServers()
+	m.configRevision = 2
+
+	older := config.Default()
+	older.Hide(3000)
+	next, _ := m.Update(saveResultMsg{
+		cfg:       older,
+		revision:  1,
+		hasConfig: true,
+	})
+	m = next.(Model)
+	if m.cfg.IsHidden(3000) {
+		t.Fatal("older save result overwrote a newer local config revision")
+	}
+}
+
+func TestShowHiddenAndUnhideSelected(t *testing.T) {
+	cfg := config.Default()
+	cfg.Hide(5432)
+	m := New(mockScanner{servers: testServers()}, cfg)
+	m.servers = applyConfig(testServers(), cfg)
+
+	if len(m.visibleServers()) != 2 {
+		t.Fatalf("default visible = %d, want 2", len(m.visibleServers()))
+	}
+	m, _ = drive(m, runes("a"))
+	if !m.showHidden || len(m.visibleServers()) != 3 {
+		t.Fatalf("showHidden = %v, visible = %d; want true/3", m.showHidden, len(m.visibleServers()))
+	}
+
+	m, _ = drive(m, runes("j")) // port 5432
+	selected, ok := m.selected()
+	if !ok || selected.Port != 5432 || !selected.Hidden {
+		t.Fatalf("selected = %+v, want hidden port 5432", selected)
+	}
+	m, cmd := drive(m, runes("h"))
+	if cmd == nil {
+		t.Fatal("unhide produced no save command")
+	}
+	if m.cfg.IsHidden(5432) || m.servers[1].Hidden {
+		t.Fatalf("port remained hidden: cfg=%v server=%+v", m.cfg.Hidden, m.servers[1])
+	}
+	if len(m.visibleServers()) != 3 {
+		t.Fatalf("visible = %d, want 3 after unhide", len(m.visibleServers()))
+	}
+}
+
+func TestHideAndShowHiddenOnEmptyListAreNoops(t *testing.T) {
+	m := New(mockScanner{}, config.Default())
+	m, cmd := drive(m, runes("h"))
+	if cmd != nil || len(m.cfg.Hidden) != 0 {
+		t.Fatalf("hide empty produced cmd/config mutation: cmd=%v hidden=%v", cmd != nil, m.cfg.Hidden)
+	}
+	m, _ = drive(m, runes("a"))
+	if m.showHidden {
+		t.Fatal("showHidden = true with no hidden listeners")
+	}
+}
+
+func TestHiddenRowIsExplicitlyMarked(t *testing.T) {
+	cfg := config.Default()
+	cfg.Hide(3000)
+	m := New(mockScanner{}, cfg)
+	m.servers = applyConfig(testServers(), cfg)
+	m.showHidden = true
+
+	view := m.View()
+	if !strings.Contains(view, "[hidden]") {
+		t.Fatalf("hidden row lacks explicit marker:\n%s", view)
 	}
 }
 

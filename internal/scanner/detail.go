@@ -144,9 +144,10 @@ func parseEtime(s string) (time.Duration, error) {
 	return time.Duration(days)*24*time.Hour + time.Duration(total)*time.Second, nil
 }
 
-// ProbeHTTP issues a GET to http://127.0.0.1:port/ and reports whether the
-// port speaks HTTP, how fast it answered, and what it said. Redirects are not
-// followed: a 301 from the server is itself a valid answer.
+// ProbeHTTP issues a GET to http://localhost:port/ and reports whether the port
+// speaks HTTP, how fast it answered, and what it said. Resolving localhost
+// supports IPv4-only and IPv6-only listeners. Redirects are not followed: a
+// 301 from the server is itself a valid answer.
 func ProbeHTTP(ctx context.Context, port int, timeout time.Duration) HTTPProbe {
 	if timeout <= 0 {
 		timeout = DefaultProbeTimeout
@@ -154,7 +155,7 @@ func ProbeHTTP(ctx context.Context, port int, timeout time.Duration) HTTPProbe {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	url := fmt.Sprintf("http://127.0.0.1:%d/", port)
+	url := fmt.Sprintf("http://localhost:%d/", port)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return HTTPProbe{Err: err.Error()}

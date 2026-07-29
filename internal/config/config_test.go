@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -140,6 +142,88 @@ func TestSaveCreatesFileLazilyAndRoundTrips(t *testing.T) {
 	}
 	if got.RefreshInterval.Std() != 2*time.Second {
 		t.Errorf("RefreshInterval = %v, want 2s", got.RefreshInterval.Std())
+	}
+}
+
+func TestConcurrentUpdatesPreserveIndependentChanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "portview", "config.yaml")
+	const updates = 16
+
+	start := make(chan struct{})
+	errs := make(chan error, updates)
+	var wg sync.WaitGroup
+	for i := range updates {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			port := 3000 + i
+			_, _, err := UpdateFrom(path, func(cfg *Config) bool {
+				cfg.Hide(port)
+				cfg.SetLabel(port, fmt.Sprintf("server-%d", i))
+				return true
+			})
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent update: %v", err)
+		}
+	}
+	got, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	for i := range updates {
+		port := 3000 + i
+		if !got.IsHidden(port) || got.LabelFor(port) != fmt.Sprintf("server-%d", i) {
+			t.Errorf("port %d = hidden %v label %q; want hidden/server-%d",
+				port, got.IsHidden(port), got.LabelFor(port), i)
+		}
+	}
+}
+
+func TestNoOpUpdateDoesNotCreateConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "portview", "config.yaml")
+	got, changed, err := UpdateFrom(path, func(*Config) bool { return false })
+	if err != nil {
+		t.Fatalf("UpdateFrom: %v", err)
+	}
+	if changed {
+		t.Fatal("changed = true, want false")
+	}
+	if got.PortRange.Max != DefaultMaxPort {
+		t.Fatalf("returned config = %+v, want defaults", got)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("no-op update created config, stat err = %v", err)
+	}
+}
+
+func TestDefaultPathSaveAndUpdate(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	cfg := Default()
+	cfg.SetLabel(3000, "frontend")
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	updated, changed, err := Update(func(current *Config) bool {
+		current.Hide(3000)
+		return true
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !changed || !updated.IsHidden(3000) || updated.LabelFor(3000) != "frontend" {
+		t.Fatalf("updated = changed %v hidden %v labels %v; want merged frontend/hidden",
+			changed, updated.Hidden, updated.Labels)
 	}
 }
 

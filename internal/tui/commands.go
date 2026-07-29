@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"strconv"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -39,7 +40,10 @@ type killResultMsg struct {
 
 // saveResultMsg reports the outcome of persisting config.
 type saveResultMsg struct {
-	err error
+	cfg       config.Config
+	revision  uint64
+	hasConfig bool
+	err       error
 }
 
 // detailResultMsg carries the on-demand insight for one server.
@@ -50,16 +54,15 @@ type detailResultMsg struct {
 	err    error
 }
 
-// scanCmd runs a single scan, resolves docker containers, and merges config
-// (hidden filter + labels) into the result. It is fired both by the poll
-// ticker and by manual refresh.
-func scanCmd(s scanner.Scanner, cfg config.Config) tea.Cmd {
+// scanCmd runs a single scan and resolves docker containers. The model applies
+// its current config when it receives the result, avoiding stale decoration
+// when a label or hidden-port edit races an in-flight scan.
+func scanCmd(s scanner.Scanner) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		servers, err := s.Scan(ctx)
 		if err == nil {
 			servers = docker.Enrich(ctx, servers)
-			servers = applyConfig(servers, cfg)
 		}
 		return scanResultMsg{servers: servers, err: err, at: time.Now()}
 	}
@@ -93,11 +96,91 @@ func killCmd(target scanner.Server) tea.Cmd {
 	}
 }
 
-// saveCmd persists the config to disk (lazily creating the file).
-func saveCmd(cfg config.Config) tea.Cmd {
-	return func() tea.Msg {
-		return saveResultMsg{err: cfg.Save()}
+type configEditKind uint8
+
+const (
+	configEditHide configEditKind = iota
+	configEditUnhide
+	configEditLabel
+)
+
+type configEdit struct {
+	kind  configEditKind
+	port  int
+	label string
+}
+
+func (e configEdit) apply(cfg *config.Config) {
+	switch e.kind {
+	case configEditHide:
+		cfg.Hide(e.port)
+	case configEditUnhide:
+		cfg.Unhide(e.port)
+	case configEditLabel:
+		cfg.SetLabel(e.port, e.label)
 	}
+}
+
+type versionedConfigEdit struct {
+	revision uint64
+	edit     configEdit
+}
+
+// configSaver queues preference-level edits, then serializes locked
+// read-modify-write transactions. Any Tea command may execute first; it drains
+// all edits scheduled so far in revision order, preserving both rapid in-TUI
+// changes and unrelated writes from other portview processes.
+type configSaver struct {
+	mu                sync.Mutex
+	nextRevision      uint64
+	persistedRevision uint64
+	pending           []versionedConfigEdit
+}
+
+// command queues one immutable config edit and returns a command that can drain
+// the queue. The revision lets the model ignore an older save result when a
+// newer local edit is already pending.
+func (s *configSaver) command(edit configEdit) (tea.Cmd, uint64) {
+	s.mu.Lock()
+	s.nextRevision++
+	revision := s.nextRevision
+	s.pending = append(s.pending, versionedConfigEdit{revision: revision, edit: edit})
+	s.mu.Unlock()
+
+	return func() tea.Msg {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if revision <= s.persistedRevision {
+			return saveResultMsg{}
+		}
+
+		pending := append([]versionedConfigEdit(nil), s.pending...)
+		lastRevision := pending[len(pending)-1].revision
+		updated, _, err := config.Update(func(current *config.Config) bool {
+			for _, item := range pending {
+				item.edit.apply(current)
+			}
+			return len(pending) > 0
+		})
+		if err != nil {
+			return saveResultMsg{revision: lastRevision, err: err}
+		}
+
+		s.pending = nil
+		s.persistedRevision = lastRevision
+		return saveResultMsg{
+			cfg:       updated,
+			revision:  lastRevision,
+			hasConfig: true,
+		}
+	}, revision
+}
+
+func hideEdit(port int, hidden bool) configEdit {
+	if hidden {
+		return configEdit{kind: configEditHide, port: port}
+	}
+	return configEdit{kind: configEditUnhide, port: port}
 }
 
 // inspectCmd gathers the insight pane's data for one server: process detail
@@ -112,9 +195,8 @@ func inspectCmd(s scanner.Server) tea.Cmd {
 	}
 }
 
-// applyConfig is the app-logic merge step: drop hidden ports and attach the
-// user's saved label to each remaining server. It delegates to config.Decorate
-// so the TUI and CLI share one filtering implementation.
+// applyConfig is the app-logic merge step: retain hidden ports while attaching
+// saved labels and hidden state. Model.visibleServers owns display filtering.
 func applyConfig(in []scanner.Server, cfg config.Config) []scanner.Server {
-	return cfg.Decorate(in, false)
+	return cfg.Decorate(in, true)
 }

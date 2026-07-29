@@ -1,6 +1,7 @@
-// Package cli implements portview's non-TUI subcommands: list, kill, and
-// open. These make portview scriptable — `portview list --json` in a pipeline,
-// `portview kill 3000` in an alias — without opening the full-screen UI.
+// Package cli implements portview's non-TUI subcommands. These make portview
+// scriptable — `portview list --json` in a pipeline, `portview kill 3000` in an
+// alias, or `portview hide 5432` to persistently declutter the default view —
+// without opening the full-screen UI.
 package cli
 
 import (
@@ -9,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"text/tabwriter"
 	"time"
@@ -28,11 +30,15 @@ Usage:
       --all             include ports hidden by config
   portview kill <port>  stop the server on <port> (docker stop for containers)
   portview open <port>  open localhost:<port> in the browser
+  portview hide <port>  hide <port> from the default list
+  portview unhide <port> show <port> in the default list again
+  portview hidden       list all configured hidden ports
+      --json            output as JSON
   portview version      print version
 `
 
 // Commands lists the subcommand names main dispatches to this package.
-var Commands = []string{"list", "kill", "open", "version", "help"}
+var Commands = []string{"list", "kill", "open", "hide", "unhide", "hidden", "version", "help"}
 
 // fprintf writes formatted CLI output, ignoring write errors: output goes to
 // a terminal or pipe, where a failed write has no recovery path.
@@ -53,6 +59,12 @@ func Run(args []string, version string, stdout, stderr io.Writer) int {
 		return runKill(args[1:], stdout, stderr)
 	case "open":
 		return runOpen(args[1:], stdout, stderr)
+	case "hide":
+		return runVisibility("hide", args[1:], true, stdout, stderr)
+	case "unhide":
+		return runVisibility("unhide", args[1:], false, stdout, stderr)
+	case "hidden":
+		return runHidden(args[1:], stdout, stderr)
 	case "version":
 		fprintf(stdout, "portview %s\n", version)
 		return 0
@@ -113,18 +125,35 @@ func runList(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
+	writeServerTable(stdout, servers, *all)
+	return 0
+}
+
+func writeServerTable(stdout io.Writer, servers []scanner.Server, showHiddenColumn bool) {
 	w := tabwriter.NewWriter(stdout, 2, 4, 2, ' ', 0)
-	fprintf(w, "PORT\tPROCESS\tPID\tSTATE\tLABEL\tCONTAINER\tCOMMAND\n")
+	if showHiddenColumn {
+		fprintf(w, "PORT\tPROCESS\tPID\tSTATE\tLABEL\tHIDDEN\tCONTAINER\tCOMMAND\n")
+	} else {
+		fprintf(w, "PORT\tPROCESS\tPID\tSTATE\tLABEL\tCONTAINER\tCOMMAND\n")
+	}
 	for _, s := range servers {
 		state := "up"
 		if !s.Healthy {
 			state = "down"
 		}
-		fprintf(w, "%d\t%s\t%d\t%s\t%s\t%s\t%s\n",
-			s.Port, s.Process, s.PID, state, s.Label, s.Container, s.Command)
+		hidden := ""
+		if s.Hidden {
+			hidden = "yes"
+		}
+		if showHiddenColumn {
+			fprintf(w, "%d\t%s\t%d\t%s\t%s\t%s\t%s\t%s\n",
+				s.Port, s.Process, s.PID, state, s.Label, hidden, s.Container, s.Command)
+		} else {
+			fprintf(w, "%d\t%s\t%d\t%s\t%s\t%s\t%s\n",
+				s.Port, s.Process, s.PID, state, s.Label, s.Container, s.Command)
+		}
 	}
 	_ = w.Flush()
-	return 0
 }
 
 func runKill(args []string, stdout, stderr io.Writer) int {
@@ -175,7 +204,98 @@ func runOpen(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// portArg parses the single required <port> argument of kill/open.
+func runVisibility(cmd string, args []string, hide bool, stdout, stderr io.Writer) int {
+	port, ok := portArg(cmd, args, stderr)
+	if !ok {
+		return 2
+	}
+
+	_, changed, err := config.Update(func(current *config.Config) bool {
+		if hide {
+			if current.IsHidden(port) {
+				return false
+			}
+			current.Hide(port)
+			return true
+		}
+		if !current.IsHidden(port) {
+			return false
+		}
+		current.Unhide(port)
+		return true
+	})
+	if err != nil {
+		fprintf(stderr, "portview: %v\n", err)
+		return 1
+	}
+	if !changed {
+		if hide {
+			fprintf(stdout, "port %d is already hidden\n", port)
+		} else {
+			fprintf(stdout, "port %d is not hidden\n", port)
+		}
+		return 0
+	}
+	if hide {
+		fprintf(stdout, "hid port %d\n", port)
+	} else {
+		fprintf(stdout, "unhid port %d\n", port)
+	}
+	return 0
+}
+
+func runHidden(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("hidden", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	asJSON := fs.Bool("json", false, "output as JSON")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fprintf(stderr, "usage: portview hidden\n")
+		return 2
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		fprintf(stderr, "portview: %v\n", err)
+		return 1
+	}
+	type hiddenPort struct {
+		Port  int    `json:"port"`
+		Label string `json:"label,omitempty"`
+	}
+
+	ports := append([]int(nil), cfg.Hidden...)
+	sort.Ints(ports)
+	hidden := make([]hiddenPort, 0, len(ports))
+	for _, port := range ports {
+		hidden = append(hidden, hiddenPort{Port: port, Label: cfg.LabelFor(port)})
+	}
+
+	if *asJSON {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(hidden); err != nil {
+			fprintf(stderr, "portview: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if len(hidden) == 0 {
+		fprintf(stdout, "no hidden ports\n")
+		return 0
+	}
+
+	w := tabwriter.NewWriter(stdout, 2, 4, 2, ' ', 0)
+	fprintf(w, "PORT\tLABEL\n")
+	for _, item := range hidden {
+		fprintf(w, "%d\t%s\n", item.Port, item.Label)
+	}
+	_ = w.Flush()
+	return 0
+}
+
+// portArg parses the single required <port> argument for a port subcommand.
 func portArg(cmd string, args []string, stderr io.Writer) (int, bool) {
 	if len(args) != 1 {
 		fprintf(stderr, "usage: portview %s <port>\n", cmd)

@@ -3,7 +3,8 @@
 > A lightweight TUI for discovering and managing localhost dev servers.
 
 **Date:** 2026-02-16
-**Status:** Draft
+**Status:** Implemented through v0.3
+**Last updated:** 2026-07-28
 **Language:** Go + Bubble Tea
 **Platforms:** macOS, Linux
 
@@ -15,9 +16,11 @@ Developers routinely run multiple local servers (frontend, API, database, etc.) 
 
 ## Solution
 
-A single-binary TUI that auto-discovers TCP servers listening on localhost, shows what process owns each port, and lets you open, kill, or label them.
+A single-binary TUI and scriptable CLI that auto-discovers TCP servers listening
+on localhost, shows the process or container that owns each port, and lets you
+open, inspect, kill, label, hide, and filter them.
 
-## Non-Goals (v0.1)
+## Non-Goals
 
 - Windows support
 - Log viewing or tailing
@@ -34,8 +37,8 @@ A single-binary TUI that auto-discovers TCP servers listening on localhost, show
 │           TUI Layer             │  Bubble Tea model + Lip Gloss styling
 │  (view, keybindings, layout)    │
 ├─────────────────────────────────┤
-│         App Logic Layer         │  State management, label CRUD,
-│  (model updates, commands)      │  action dispatch
+│         App Logic Layer         │  State, label/visibility CRUD,
+│  (model updates, commands)      │  action dispatch, CLI commands
 ├─────────────────────────────────┤
 │        Scanner Layer            │  Port discovery, process resolution
 │  (platform-specific backends)   │
@@ -55,9 +58,13 @@ portview/
 ├── internal/
 │   ├── scanner/
 │   │   ├── scanner.go           # Scanner interface + Server type
+│   │   ├── detail.go            # On-demand process + HTTP insight
 │   │   ├── scanner_darwin.go    # macOS: lsof-based implementation
-│   │   ├── scanner_linux.go     # Linux: /proc/net/tcp implementation
+│   │   ├── scanner_linux.go     # Linux: /proc/net/tcp{,6} implementation
 │   │   └── scanner_test.go      # Unit tests with mock data
+│   ├── action/                  # Shared browser/termination actions
+│   ├── cli/                     # list/kill/open/hide/unhide/hidden
+│   ├── docker/                  # Container discovery and safe stop
 │   ├── tui/
 │   │   ├── model.go             # Bubble Tea model
 │   │   ├── view.go              # Rendering logic
@@ -100,7 +107,10 @@ type Server struct {
     Command string // Full command line (e.g., "node server.js")
     State   string // TCP state, typically "LISTEN"
     Label   string // User-assigned label from config (e.g., "frontend")
+    Hidden  bool   // Config hides the port from the default view
     Healthy bool   // True if port responds to TCP connect
+    Container string // Docker/OrbStack container name, when applicable
+    Image     string // Container image
 }
 ```
 
@@ -122,17 +132,20 @@ Platform-specific implementations (`darwinScanner`, `linuxScanner`) satisfy this
 
 1. **Discover listening ports**
    - **macOS:** Shell out to `lsof -iTCP -sTCP:LISTEN -nP`. Parse output for port + PID.
-   - **Linux:** Read `/proc/net/tcp`, filter for `LISTEN` state, extract local port + inode, map inode to PID via `/proc/{pid}/fd`.
+   - **Linux:** Read `/proc/net/tcp` and `/proc/net/tcp6`, filter for `LISTEN` state, extract local port + inode, map inode to PID via `/proc/{pid}/fd`.
 
 2. **Resolve process info**
    - **macOS:** `ps -p {pid} -o comm=,args=` for process name and full command.
    - **Linux:** Read `/proc/{pid}/comm` and `/proc/{pid}/cmdline`.
 
 3. **Health check**
-   - TCP dial to `localhost:{port}` with 200ms timeout. Binary healthy/unhealthy.
+   - TCP dial to `localhost:{port}` with 200ms timeout. Go's dual-stack dialer
+     supports IPv4-only and IPv6-only dev servers.
 
-4. **Merge labels**
-   - Match discovered ports against user's saved labels from config.
+4. **Enrich**
+   - Resolve Docker/OrbStack proxies to their container name and image.
+5. **Apply config decoration at result receipt**
+   - Match discovered ports against saved labels and hidden-port preferences.
 
 ### Port Range
 
@@ -158,7 +171,7 @@ The scanner runs on a ticker (default 3s). Each tick fires a Bubble Tea `Cmd` th
 │                                                     │
 ├─────────────────────────────────────────────────────┤
 │  4 servers · refreshed 1s ago                       │
-│  o:open  k:kill  l:label  r:refresh  /:filter  ?:help│
+│  o:open  x:kill  h:hide  a:hidden  /:filter  ?:help  │
 ╰─────────────────────────────────────────────────────╯
 ```
 
@@ -174,8 +187,11 @@ Three zones:
 |-----|--------|
 | `↑/↓` or `j/k` | Navigate list |
 | `o` or `Enter` | Open in default browser |
-| `k` | Kill process (with y/n confirmation) |
+| `i` | Open the on-demand insight pane |
+| `x` | Kill process/container (with y/n confirmation) |
 | `l` | Set/edit label for selected port |
+| `h` | Hide selected port, or unhide a revealed port |
+| `a` | Toggle configured hidden ports |
 | `r` | Force immediate refresh |
 | `/` | Filter/search by port, process, or label |
 | `q` or `Ctrl+C` | Quit |
@@ -185,7 +201,14 @@ Three zones:
 
 - **Kill confirmation:** Inline in the status bar: "Kill PID 1234? (y/n)". Not a modal.
 - **Label editing:** Inline text input replacing the label cell. Enter to save, Esc to cancel.
-- **Filter:** Live-filter input at the top that narrows the list as you type. Matches against port number, process name, and label.
+- **Visibility:** Hiding persists immediately. Hidden listeners remain in the
+  model so `a` can reveal them without another platform scan; revealed rows
+  carry an explicit `[hidden]` marker (`[h]` when labeled), and `h` restores
+  them.
+- **Filter:** Live-filter input at the top that narrows the list as you type.
+  Matches port, process, label, container name, and image.
+- **Insight:** On demand only: cwd, uptime, CPU/memory/RSS, and an IPv4/IPv6
+  localhost HTTP probe. It never adds work to the poll loop.
 
 ---
 
@@ -218,7 +241,9 @@ hidden:
 ### Behavior
 
 - **Labels:** Saved immediately on user action. Port-based (not PID-based) since dev servers reuse ports.
-- **Hidden ports:** Filtered out of the display. Useful for noisy background services.
+- **Hidden ports:** Filtered out of the default display. `h`/`a` manage them in
+  the TUI; `hide`, `unhide`, and `hidden [--json]` provide the same workflow
+  without the TUI.
 - **Preferences:** Refresh interval, port range.
 - **No config required:** Tool works with sensible defaults if no config file exists.
 - **Lazy creation:** Config file is only created on first user action that needs persistence (setting a label, hiding a port).
@@ -243,7 +268,8 @@ hidden:
 
 - Bubble Tea's `teatest` package for programmatic testing.
 - Send key messages, assert on rendered output.
-- Cover: navigation, kill confirmation flow, label editing, filter input.
+- Cover: navigation, kill confirmation, label editing, hide/unhide,
+  show-hidden, stale-scan config races, filtering, and the insight pane.
 
 ---
 
@@ -252,14 +278,16 @@ hidden:
 ### GitHub Actions
 
 **ci.yaml** (runs on every PR):
+
 - Lint with `golangci-lint`
 - Run `go test ./...` on both `ubuntu-latest` and `macos-latest` runners
 - Build check for both platforms
 
 **release.yaml** (runs on version tags `v*`):
+
 - GoReleaser builds cross-platform binaries
 - Publishes GitHub release with binaries
-- Updates Homebrew tap formula
+- Updates the Homebrew tap cask
 
 ### Build Targets
 
@@ -272,8 +300,8 @@ hidden:
 
 ## Distribution
 
-- **`go install`:** `go install github.com/<owner>/portview@latest`
-- **Homebrew:** `brew install <owner>/tap/portview` (auto-generated by GoReleaser)
+- **`go install`:** `go install github.com/jeramiahgcoffey/portview/cmd/portview@latest`
+- **Homebrew:** `brew install jeramiahgcoffey/tap/portview` (auto-generated by GoReleaser)
 - **GitHub Releases:** Pre-built binaries attached to tagged releases
 - **AUR / deb / rpm:** Not in v0.1, easy to add later via GoReleaser config
 
@@ -285,6 +313,7 @@ hidden:
 |------|---------|
 | `LICENSE` | MIT |
 | `README.md` | Demo GIF, install instructions, usage, keybindings |
+| `CHANGELOG.md` | Release-slice notes and shipped user-facing changes |
 | `CONTRIBUTING.md` | Short guide, link to issues |
 | `.goreleaser.yaml` | Release automation config |
 | `.golangci.yaml` | Linter configuration |
@@ -292,7 +321,7 @@ hidden:
 
 ---
 
-## Future Considerations (not v0.1)
+## Future Considerations
 
 - Windows support via `netstat` backend
 - Log tailing for selected processes
@@ -306,3 +335,10 @@ hidden:
 > non-TUI CLI subcommands (`list`/`kill`/`open`, with `list --json`). The
 > original layered architecture held: discovery stayed behind the scanner
 > boundary, and a new `internal/docker` package sits beside it for enrichment.
+> **v0.2.1 / v0.3 (2026-07-28 implementation):** v0.2.1 corrects health and
+> HTTP insight for IPv6-only localhost servers. v0.3 adds persistent
+> hide/unhide and show-hidden workflows across the TUI and CLI, explicit hidden
+> state in table/JSON output, receipt-time config decoration so in-flight scans
+> cannot revert newer edits, and locked revision-ordered config mutations so
+> asynchronous or cross-process saves cannot discard label or visibility
+> changes.

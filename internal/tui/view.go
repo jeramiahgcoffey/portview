@@ -29,6 +29,7 @@ var (
 	deadStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
 	labelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // cyan
 	dockerStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("5")) // magenta
+	hiddenStyle  = lipgloss.NewStyle().Faint(true)
 	statusStyle  = lipgloss.NewStyle().Faint(true)
 	errorStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // red
 	promptStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("3")) // yellow
@@ -113,6 +114,8 @@ func (m Model) renderList(inner int) string {
 			msg = "scan error"
 		case m.filter != "":
 			msg = "no matches for " + strconv.Quote(m.filter)
+		case m.hiddenCount() > 0 && !m.showHidden:
+			msg = "all servers hidden — press a to show"
 		}
 		return statusStyle.Render("  " + msg)
 	}
@@ -155,10 +158,19 @@ func (m Model) renderRow(s scanner.Server, selected bool, cmdW int) string {
 	command := fmt.Sprintf("%-*s", cmdW+colGap, truncate(cmdText, cmdW))
 
 	var label string
-	if selected && m.mode == modeLabel && s.Port == m.editPort {
+	switch {
+	case selected && m.mode == modeLabel && s.Port == m.editPort:
 		// Inline editor replaces the label cell.
 		label = m.labelInput.View()
-	} else {
+	case s.Hidden:
+		labelText := s.Label
+		if labelText == "" {
+			labelText = "[hidden]"
+		} else {
+			labelText = "[h] " + labelText
+		}
+		label = hiddenStyle.Render(truncate(labelText, colLabel))
+	default:
 		label = labelStyle.Render(truncate(s.Label, colLabel))
 	}
 
@@ -166,7 +178,7 @@ func (m Model) renderRow(s scanner.Server, selected bool, cmdW int) string {
 }
 
 func (m Model) renderStatus() string {
-	hints := "↑↓/jk:nav  o:open  i:inspect  x:kill  l:label  r:refresh  /:filter  ?:help  q:quit"
+	hints := "↑↓/jk:nav  o:open  i:inspect  x:kill  l:label  h:hide  a:hidden  r:refresh  /:filter  ?:help  q:quit"
 
 	var line1 string
 	switch {
@@ -181,7 +193,14 @@ func (m Model) renderStatus() string {
 	default:
 		count := fmt.Sprintf("%d servers", len(m.visibleServers()))
 		if m.filter != "" {
-			count += fmt.Sprintf(" (filtered from %d)", len(m.servers))
+			count += fmt.Sprintf(" (filtered from %d)", len(m.visibilityServers()))
+		}
+		if hidden := m.hiddenCount(); hidden > 0 {
+			if m.showHidden {
+				count += fmt.Sprintf(" · %d hidden shown", hidden)
+			} else {
+				count += fmt.Sprintf(" · %d hidden", hidden)
+			}
 		}
 		line1 = statusStyle.Render(count + " · " + m.refreshedAgo())
 	}
@@ -209,6 +228,9 @@ func (m Model) renderDetail(inner int) string {
 	title := fmt.Sprintf(":%d  %s (pid %d)", s.Port, s.Process, s.PID)
 	if s.Label != "" {
 		title += "  · " + labelStyle.Render(s.Label)
+	}
+	if s.Hidden {
+		title += "  · " + hiddenStyle.Render("[hidden]")
 	}
 
 	var b strings.Builder

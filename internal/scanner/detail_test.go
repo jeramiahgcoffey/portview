@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -153,6 +154,27 @@ func TestProbeHTTPSuccess(t *testing.T) {
 	}
 	if p.Latency <= 0 {
 		t.Errorf("Latency = %v, want > 0", p.Latency)
+	}
+}
+
+func TestProbeHTTPIPv6(t *testing.T) {
+	ln := listenLoopback(t, "tcp6", "[::1]:0")
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Server", "ipv6-testsrv")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	_ = ts.Listener.Close() // replace httptest's auto-created listener below
+	ts.Listener = ln
+	ts.Start()
+	defer ts.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	p := ProbeHTTP(context.Background(), port, time.Second)
+	if !p.OK {
+		t.Fatalf("IPv6 probe not OK: %+v", p)
+	}
+	if p.Status != http.StatusNoContent || p.Server != "ipv6-testsrv" {
+		t.Errorf("probe = %+v, want status 204 from ipv6-testsrv", p)
 	}
 }
 

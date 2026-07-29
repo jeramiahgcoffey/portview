@@ -19,6 +19,7 @@ type Server struct {
 	Command   string `json:"command"`             // Full command line (e.g., "node server.js")
 	State     string `json:"state"`               // TCP state, typically "LISTEN"
 	Label     string `json:"label,omitempty"`     // User-assigned label from config (e.g., "frontend")
+	Hidden    bool   `json:"hidden,omitempty"`    // True when config hides this port from the default view
 	Healthy   bool   `json:"healthy"`             // True if port responds to TCP connect
 	Container string `json:"container,omitempty"` // Docker container name, when the port is published by one
 	Image     string `json:"image,omitempty"`     // Docker image for Container
@@ -90,9 +91,11 @@ func dedupeByPort(in []listing) []listing {
 }
 
 // dialHealthy reports whether a TCP connection to localhost:port succeeds
-// within timeout.
+// within timeout. Using the hostname instead of a fixed loopback address lets
+// Go's dialer race IPv4 and IPv6, so an IPv6-only dev server is not reported as
+// unhealthy.
 func dialHealthy(port int, timeout time.Duration) bool {
-	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	addr := net.JoinHostPort("localhost", strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return false

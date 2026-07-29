@@ -11,6 +11,8 @@ type keyMap struct {
 	Inspect key.Binding
 	Kill    key.Binding
 	Label   key.Binding
+	Hide    key.Binding
+	All     key.Binding
 	Refresh key.Binding
 	Filter  key.Binding
 	Help    key.Binding
@@ -44,6 +46,14 @@ func defaultKeys() keyMap {
 			key.WithKeys("l"),
 			key.WithHelp("l", "label"),
 		),
+		Hide: key.NewBinding(
+			key.WithKeys("h"),
+			key.WithHelp("h", "hide/unhide"),
+		),
+		All: key.NewBinding(
+			key.WithKeys("a"),
+			key.WithHelp("a", "hidden"),
+		),
 		Refresh: key.NewBinding(
 			key.WithKeys("r"),
 			key.WithHelp("r", "refresh"),
@@ -65,7 +75,7 @@ func defaultKeys() keyMap {
 
 // ShortHelp implements help.KeyMap.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Open, k.Inspect, k.Kill, k.Label, k.Refresh, k.Filter, k.Help, k.Quit}
+	return []key.Binding{k.Open, k.Inspect, k.Kill, k.Label, k.Hide, k.All, k.Refresh, k.Filter, k.Help, k.Quit}
 }
 
 // FullHelp implements help.KeyMap.
@@ -73,7 +83,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down},
 		{k.Open, k.Inspect, k.Kill, k.Label},
-		{k.Refresh, k.Filter},
+		{k.Hide, k.All, k.Refresh, k.Filter},
 		{k.Help, k.Quit},
 	}
 }
