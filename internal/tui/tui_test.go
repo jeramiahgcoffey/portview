@@ -145,6 +145,28 @@ func TestScanResultUpdatesModel(t *testing.T) {
 	}
 }
 
+func TestScanResultUsesCurrentConfig(t *testing.T) {
+	cfg := config.Default()
+	cfg.Hide(5432)
+	cfg.SetLabel(3000, "frontend")
+	m := New(mockScanner{}, cfg)
+
+	// The result is intentionally raw, as if the scan started before the
+	// config edits. Update must decorate it with the model's current config.
+	next, _ := m.Update(scanResultMsg{servers: testServers(), at: time.Unix(1, 0)})
+	m = next.(Model)
+
+	if len(m.servers) != 3 || !m.servers[1].Hidden {
+		t.Fatalf("decorated servers = %+v, want hidden 5432 retained", m.servers)
+	}
+	if m.servers[0].Label != "frontend" {
+		t.Fatalf("port 3000 label = %q, want frontend", m.servers[0].Label)
+	}
+	if len(m.visibleServers()) != 2 {
+		t.Fatalf("visible = %d, want hidden port filtered", len(m.visibleServers()))
+	}
+}
+
 func TestKillConfirmPromptRenders(t *testing.T) {
 	tm := newTestModel(t, testServers())
 	out := tm.Output()
@@ -176,21 +198,21 @@ func TestFilterInputRenders(t *testing.T) {
 	quit(t, tm)
 }
 
-func TestApplyConfigHidesAndLabels(t *testing.T) {
+func TestApplyConfigRetainsHiddenAndLabels(t *testing.T) {
 	cfg := config.Default()
 	cfg.SetLabel(3000, "frontend")
 	cfg.Hide(5432)
 
 	got := applyConfig(testServers(), cfg)
-	if len(got) != 2 {
-		t.Fatalf("got %d servers, want 2 (5432 hidden)", len(got))
+	if len(got) != 3 {
+		t.Fatalf("got %d servers, want all 3 retained in the model", len(got))
 	}
 	if got[0].Port != 3000 || got[0].Label != "frontend" {
 		t.Errorf("server[0] = %+v, want port 3000 labeled frontend", got[0])
 	}
 	for _, s := range got {
-		if s.Port == 5432 {
-			t.Errorf("port 5432 should be hidden, got %+v", s)
+		if s.Port == 5432 && !s.Hidden {
+			t.Errorf("port 5432 should be marked hidden, got %+v", s)
 		}
 	}
 }

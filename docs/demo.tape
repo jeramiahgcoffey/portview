@@ -54,6 +54,14 @@ Sleep 400ms
 Enter
 Sleep 1200ms
 
+# declutter: hide the selected port, reveal hidden rows, then restore it
+Type "h"
+Sleep 1200ms
+Type "a"
+Sleep 1200ms
+Type "h"
+Sleep 1200ms
+
 # insight pane: cwd, uptime, cpu/mem, live HTTP probe
 Type "i"
 Sleep 2500ms

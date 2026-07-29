@@ -141,14 +141,15 @@ func (c Config) SaveTo(path string) error {
 	return nil
 }
 
-// Decorate applies the config to a freshly scanned server list: it drops
-// hidden ports (unless includeHidden) and attaches each server's saved label.
-// It is the single merge point shared by the TUI and CLI so their filtering
-// behavior cannot drift apart.
+// Decorate applies the config to a freshly scanned server list: it marks
+// hidden ports, drops them unless includeHidden, and attaches each server's
+// saved label. It is the single merge point shared by the TUI and CLI so their
+// filtering behavior cannot drift apart.
 func (c Config) Decorate(servers []scanner.Server, includeHidden bool) []scanner.Server {
 	out := make([]scanner.Server, 0, len(servers))
 	for _, s := range servers {
-		if !includeHidden && c.IsHidden(s.Port) {
+		s.Hidden = c.IsHidden(s.Port)
+		if !includeHidden && s.Hidden {
 			continue
 		}
 		s.Label = c.LabelFor(s.Port)

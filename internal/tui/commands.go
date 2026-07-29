@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"strconv"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -50,16 +51,15 @@ type detailResultMsg struct {
 	err    error
 }
 
-// scanCmd runs a single scan, resolves docker containers, and merges config
-// (hidden filter + labels) into the result. It is fired both by the poll
-// ticker and by manual refresh.
-func scanCmd(s scanner.Scanner, cfg config.Config) tea.Cmd {
+// scanCmd runs a single scan and resolves docker containers. The model applies
+// its current config when it receives the result, avoiding stale decoration
+// when a label or hidden-port edit races an in-flight scan.
+func scanCmd(s scanner.Scanner) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		servers, err := s.Scan(ctx)
 		if err == nil {
 			servers = docker.Enrich(ctx, servers)
-			servers = applyConfig(servers, cfg)
 		}
 		return scanResultMsg{servers: servers, err: err, at: time.Now()}
 	}
@@ -93,11 +93,41 @@ func killCmd(target scanner.Server) tea.Cmd {
 	}
 }
 
-// saveCmd persists the config to disk (lazily creating the file).
-func saveCmd(cfg config.Config) tea.Cmd {
+// configSaver serializes config writes and discards superseded commands. Tea
+// commands run asynchronously, so without revision ordering a slower old save
+// could overwrite a newer hide/unhide or label edit.
+type configSaver struct {
+	mu       sync.Mutex
+	revision uint64
+}
+
+// command captures an immutable config snapshot and returns an ordered save.
+// Scheduling a new command supersedes any older command that has not started.
+func (s *configSaver) command(cfg config.Config) tea.Cmd {
+	snapshot := cloneConfig(cfg)
+	s.mu.Lock()
+	s.revision++
+	revision := s.revision
+	s.mu.Unlock()
+
 	return func() tea.Msg {
-		return saveResultMsg{err: cfg.Save()}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if revision != s.revision {
+			return saveResultMsg{}
+		}
+		return saveResultMsg{err: snapshot.Save()}
 	}
+}
+
+func cloneConfig(cfg config.Config) config.Config {
+	clone := cfg
+	clone.Hidden = append([]int(nil), cfg.Hidden...)
+	clone.Labels = make(map[int]string, len(cfg.Labels))
+	for port, label := range cfg.Labels {
+		clone.Labels[port] = label
+	}
+	return clone
 }
 
 // inspectCmd gathers the insight pane's data for one server: process detail
@@ -112,9 +142,8 @@ func inspectCmd(s scanner.Server) tea.Cmd {
 	}
 }
 
-// applyConfig is the app-logic merge step: drop hidden ports and attach the
-// user's saved label to each remaining server. It delegates to config.Decorate
-// so the TUI and CLI share one filtering implementation.
+// applyConfig is the app-logic merge step: retain hidden ports while attaching
+// saved labels and hidden state. Model.visibleServers owns display filtering.
 func applyConfig(in []scanner.Server, cfg config.Config) []scanner.Server {
-	return cfg.Decorate(in, false)
+	return cfg.Decorate(in, true)
 }

@@ -46,4 +46,10 @@ func TestDecorateIncludeHiddenKeepsAll(t *testing.T) {
 	if got[0].Label != "frontend" {
 		t.Errorf("server[0].Label = %q, want frontend", got[0].Label)
 	}
+	if !got[1].Hidden {
+		t.Errorf("server[1].Hidden = false, want true for configured hidden port")
+	}
+	if got[0].Hidden || got[2].Hidden {
+		t.Errorf("visible servers unexpectedly marked hidden: %+v", got)
+	}
 }

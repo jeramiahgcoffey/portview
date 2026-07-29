@@ -19,6 +19,7 @@ type Server struct {
 	Command   string `json:"command"`             // Full command line (e.g., "node server.js")
 	State     string `json:"state"`               // TCP state, typically "LISTEN"
 	Label     string `json:"label,omitempty"`     // User-assigned label from config (e.g., "frontend")
+	Hidden    bool   `json:"hidden,omitempty"`    // True when config hides this port from the default view
 	Healthy   bool   `json:"healthy"`             // True if port responds to TCP connect
 	Container string `json:"container,omitempty"` // Docker container name, when the port is published by one
 	Image     string `json:"image,omitempty"`     // Docker image for Container
