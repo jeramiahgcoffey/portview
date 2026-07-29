@@ -42,14 +42,15 @@ type Model struct {
 	scanErr    error
 	showHidden bool // whether configured hidden listeners are visible
 
-	mode        mode
-	killTarget  scanner.Server  // process awaiting kill confirmation
-	editPort    int             // port whose label is being edited
-	labelInput  textinput.Model // inline label editor
-	filterInput textinput.Model // live filter input
-	filter      string          // active filter query (persists after Enter)
-	showHelp    bool            // full help overlay visible
-	status      string          // transient feedback line
+	mode           mode
+	killTarget     scanner.Server  // process awaiting kill confirmation
+	editPort       int             // port whose label is being edited
+	labelInput     textinput.Model // inline label editor
+	filterInput    textinput.Model // live filter input
+	filter         string          // active filter query (persists after Enter)
+	showHelp       bool            // full help overlay visible
+	status         string          // transient feedback line
+	configRevision uint64          // latest locally scheduled config edit
 
 	detailTarget  scanner.Server    // server shown in the insight pane
 	detail        scanner.Detail    // process insight for detailTarget
@@ -147,7 +148,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case saveResultMsg:
 		if msg.err != nil {
-			m.status = "save failed: " + msg.err.Error()
+			if msg.revision >= m.configRevision {
+				m.status = "save failed: " + msg.err.Error()
+			}
+			return m, nil
+		}
+		if msg.hasConfig && msg.revision >= m.configRevision {
+			// The locked transaction may have merged edits from another CLI or
+			// TUI process. Adopt that latest state without letting an older
+			// asynchronous result overwrite a newer local edit.
+			m.cfg = msg.cfg
+			m.servers = applyConfig(m.servers, m.cfg)
+			m.clampCursor()
 		}
 		return m, nil
 
@@ -243,16 +255,21 @@ func (m Model) handleNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, m.keys.Hide):
 		if s, ok := m.selected(); ok {
+			var edit configEdit
 			if s.Hidden {
 				m.cfg.Unhide(s.Port)
 				m.status = "unhid :" + strconv.Itoa(s.Port)
+				edit = hideEdit(s.Port, false)
 			} else {
 				m.cfg.Hide(s.Port)
 				m.status = "hid :" + strconv.Itoa(s.Port) + " · press a to show hidden"
+				edit = hideEdit(s.Port, true)
 			}
 			m.servers = applyConfig(m.servers, m.cfg)
 			m.clampCursor()
-			return m, m.saver.command(m.cfg)
+			cmd, revision := m.saver.command(edit)
+			m.configRevision = revision
+			return m, cmd
 		}
 		return m, nil
 
@@ -340,7 +357,13 @@ func (m Model) handleLabel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "labeled :" + strconv.Itoa(m.editPort) + " " + value
 		}
-		return m, m.saver.command(m.cfg)
+		cmd, revision := m.saver.command(configEdit{
+			kind:  configEditLabel,
+			port:  m.editPort,
+			label: value,
+		})
+		m.configRevision = revision
+		return m, cmd
 
 	case tea.KeyEsc:
 		m.mode = modeNormal

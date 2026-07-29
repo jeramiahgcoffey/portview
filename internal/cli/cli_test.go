@@ -3,9 +3,11 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jeramiahgcoffey/portview/internal/config"
@@ -153,6 +155,44 @@ func TestHideAndUnhidePersistConfig(t *testing.T) {
 	}
 	if cfg.IsHidden(5432) {
 		t.Fatalf("hidden = %v, want 5432 removed", cfg.Hidden)
+	}
+}
+
+func TestConcurrentHideCommandsPreserveAllPorts(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const commands = 12
+
+	start := make(chan struct{})
+	results := make(chan string, commands)
+	var wg sync.WaitGroup
+	for i := range commands {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			port := 4000 + i
+			code, _, errOut := run("hide", fmt.Sprint(port))
+			if code != 0 {
+				results <- fmt.Sprintf("port %d: code %d stderr %q", port, code, errOut)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	for result := range results {
+		t.Error(result)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for i := range commands {
+		port := 4000 + i
+		if !cfg.IsHidden(port) {
+			t.Errorf("hidden = %v, want concurrent port %d preserved", cfg.Hidden, port)
+		}
 	}
 }
 

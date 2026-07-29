@@ -152,22 +152,24 @@ func TestConfigSaverNewestRevisionWins(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	saver := &configSaver{}
 
-	hidden := config.Default()
-	hidden.Hide(3000)
-	staleCmd := saver.command(hidden)
-
-	visible := config.Default()
-	latestCmd := saver.command(visible)
+	staleCmd, _ := saver.command(hideEdit(3000, true))
+	latestCmd, _ := saver.command(hideEdit(3000, false))
 
 	// Execute in the worst possible order: newest first, then the stale command
-	// that would overwrite it without revision ordering.
+	// that would overwrite it without an ordered edit queue.
 	latestResult := latestCmd().(saveResultMsg)
 	if latestResult.err != nil {
 		t.Fatalf("latest save: %v", latestResult.err)
 	}
+	if !latestResult.hasConfig || latestResult.revision != 2 {
+		t.Fatalf("latest result = %+v, want persisted revision 2", latestResult)
+	}
 	staleResult := staleCmd().(saveResultMsg)
 	if staleResult.err != nil {
 		t.Fatalf("stale save: %v", staleResult.err)
+	}
+	if staleResult.hasConfig {
+		t.Fatalf("stale command persisted config: %+v", staleResult)
 	}
 
 	loaded, err := config.Load()
@@ -179,18 +181,19 @@ func TestConfigSaverNewestRevisionWins(t *testing.T) {
 	}
 }
 
-func TestConfigSaverCapturesImmutableSnapshot(t *testing.T) {
+func TestConfigSaverCapturesImmutableEdits(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	saver := &configSaver{}
-	cfg := config.Default()
-	cfg.Hide(3000)
-	cfg.SetLabel(3000, "frontend")
-	cmd := saver.command(cfg)
+	_, _ = saver.command(hideEdit(3000, true))
+	label := "frontend"
+	cmd, _ := saver.command(configEdit{kind: configEditLabel, port: 3000, label: label})
 
-	// Mutating the model config after scheduling must not alter the command's
-	// snapshot through shared slice/map backing storage.
-	cfg.Unhide(3000)
-	cfg.SetLabel(3000, "changed")
+	// Changing the source variable after scheduling must not alter the queued
+	// value, and the later command must drain both queued edits.
+	label = "changed"
+	if label != "changed" {
+		t.Fatal("source label mutation failed")
+	}
 	result := cmd().(saveResultMsg)
 	if result.err != nil {
 		t.Fatalf("save: %v", result.err)
@@ -203,6 +206,52 @@ func TestConfigSaverCapturesImmutableSnapshot(t *testing.T) {
 	if !loaded.IsHidden(3000) || loaded.LabelFor(3000) != "frontend" {
 		t.Fatalf("saved snapshot = hidden %v, label %q; want hidden/frontend",
 			loaded.Hidden, loaded.LabelFor(3000))
+	}
+}
+
+func TestConfigSaverPreservesExternalChanges(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	saver := &configSaver{}
+	cmd, _ := saver.command(hideEdit(3000, true))
+
+	// Simulate another portview process updating the config after this TUI edit
+	// was scheduled but before its asynchronous command starts.
+	_, _, err := config.Update(func(cfg *config.Config) bool {
+		cfg.SetLabel(8080, "backend")
+		return true
+	})
+	if err != nil {
+		t.Fatalf("external update: %v", err)
+	}
+	result := cmd().(saveResultMsg)
+	if result.err != nil {
+		t.Fatalf("save: %v", result.err)
+	}
+
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !loaded.IsHidden(3000) || loaded.LabelFor(8080) != "backend" {
+		t.Fatalf("merged config = hidden %v labels %v; want 3000 and backend",
+			loaded.Hidden, loaded.Labels)
+	}
+}
+
+func TestModelIgnoresConfigResultOlderThanLocalEdit(t *testing.T) {
+	m := newModelWithServers()
+	m.configRevision = 2
+
+	older := config.Default()
+	older.Hide(3000)
+	next, _ := m.Update(saveResultMsg{
+		cfg:       older,
+		revision:  1,
+		hasConfig: true,
+	})
+	m = next.(Model)
+	if m.cfg.IsHidden(3000) {
+		t.Fatal("older save result overwrote a newer local config revision")
 	}
 }
 

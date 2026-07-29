@@ -142,8 +142,9 @@ Platform-specific implementations (`darwinScanner`, `linuxScanner`) satisfy this
    - TCP dial to `localhost:{port}` with 200ms timeout. Go's dual-stack dialer
      supports IPv4-only and IPv6-only dev servers.
 
-4. **Enrich and decorate**
+4. **Enrich**
    - Resolve Docker/OrbStack proxies to their container name and image.
+5. **Apply config decoration at result receipt**
    - Match discovered ports against saved labels and hidden-port preferences.
 
 ### Port Range
@@ -277,11 +278,13 @@ hidden:
 ### GitHub Actions
 
 **ci.yaml** (runs on every PR):
+
 - Lint with `golangci-lint`
 - Run `go test ./...` on both `ubuntu-latest` and `macos-latest` runners
 - Build check for both platforms
 
 **release.yaml** (runs on version tags `v*`):
+
 - GoReleaser builds cross-platform binaries
 - Publishes GitHub release with binaries
 - Updates the Homebrew tap cask
@@ -332,10 +335,10 @@ hidden:
 > non-TUI CLI subcommands (`list`/`kill`/`open`, with `list --json`). The
 > original layered architecture held: discovery stayed behind the scanner
 > boundary, and a new `internal/docker` package sits beside it for enrichment.
-
 > **v0.2.1 / v0.3 (2026-07-28 implementation):** v0.2.1 corrects health and
 > HTTP insight for IPv6-only localhost servers. v0.3 adds persistent
 > hide/unhide and show-hidden workflows across the TUI and CLI, explicit hidden
 > state in table/JSON output, receipt-time config decoration so in-flight scans
-> cannot revert newer edits, and revision-ordered config writes so asynchronous
-> saves cannot persist stale label or visibility state.
+> cannot revert newer edits, and locked revision-ordered config mutations so
+> asynchronous or cross-process saves cannot discard label or visibility
+> changes.

@@ -40,7 +40,10 @@ type killResultMsg struct {
 
 // saveResultMsg reports the outcome of persisting config.
 type saveResultMsg struct {
-	err error
+	cfg       config.Config
+	revision  uint64
+	hasConfig bool
+	err       error
 }
 
 // detailResultMsg carries the on-demand insight for one server.
@@ -93,41 +96,91 @@ func killCmd(target scanner.Server) tea.Cmd {
 	}
 }
 
-// configSaver serializes config writes and discards superseded commands. Tea
-// commands run asynchronously, so without revision ordering a slower old save
-// could overwrite a newer hide/unhide or label edit.
-type configSaver struct {
-	mu       sync.Mutex
-	revision uint64
+type configEditKind uint8
+
+const (
+	configEditHide configEditKind = iota
+	configEditUnhide
+	configEditLabel
+)
+
+type configEdit struct {
+	kind  configEditKind
+	port  int
+	label string
 }
 
-// command captures an immutable config snapshot and returns an ordered save.
-// Scheduling a new command supersedes any older command that has not started.
-func (s *configSaver) command(cfg config.Config) tea.Cmd {
-	snapshot := cloneConfig(cfg)
+func (e configEdit) apply(cfg *config.Config) {
+	switch e.kind {
+	case configEditHide:
+		cfg.Hide(e.port)
+	case configEditUnhide:
+		cfg.Unhide(e.port)
+	case configEditLabel:
+		cfg.SetLabel(e.port, e.label)
+	}
+}
+
+type versionedConfigEdit struct {
+	revision uint64
+	edit     configEdit
+}
+
+// configSaver queues preference-level edits, then serializes locked
+// read-modify-write transactions. Any Tea command may execute first; it drains
+// all edits scheduled so far in revision order, preserving both rapid in-TUI
+// changes and unrelated writes from other portview processes.
+type configSaver struct {
+	mu                sync.Mutex
+	nextRevision      uint64
+	persistedRevision uint64
+	pending           []versionedConfigEdit
+}
+
+// command queues one immutable config edit and returns a command that can drain
+// the queue. The revision lets the model ignore an older save result when a
+// newer local edit is already pending.
+func (s *configSaver) command(edit configEdit) (tea.Cmd, uint64) {
 	s.mu.Lock()
-	s.revision++
-	revision := s.revision
+	s.nextRevision++
+	revision := s.nextRevision
+	s.pending = append(s.pending, versionedConfigEdit{revision: revision, edit: edit})
 	s.mu.Unlock()
 
 	return func() tea.Msg {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if revision != s.revision {
+		if revision <= s.persistedRevision {
 			return saveResultMsg{}
 		}
-		return saveResultMsg{err: snapshot.Save()}
-	}
+
+		pending := append([]versionedConfigEdit(nil), s.pending...)
+		lastRevision := pending[len(pending)-1].revision
+		updated, _, err := config.Update(func(current *config.Config) bool {
+			for _, item := range pending {
+				item.edit.apply(current)
+			}
+			return len(pending) > 0
+		})
+		if err != nil {
+			return saveResultMsg{revision: lastRevision, err: err}
+		}
+
+		s.pending = nil
+		s.persistedRevision = lastRevision
+		return saveResultMsg{
+			cfg:       updated,
+			revision:  lastRevision,
+			hasConfig: true,
+		}
+	}, revision
 }
 
-func cloneConfig(cfg config.Config) config.Config {
-	clone := cfg
-	clone.Hidden = append([]int(nil), cfg.Hidden...)
-	clone.Labels = make(map[int]string, len(cfg.Labels))
-	for port, label := range cfg.Labels {
-		clone.Labels[port] = label
+func hideEdit(port int, hidden bool) configEdit {
+	if hidden {
+		return configEdit{kind: configEditHide, port: port}
 	}
-	return clone
+	return configEdit{kind: configEditUnhide, port: port}
 }
 
 // inspectCmd gathers the insight pane's data for one server: process detail

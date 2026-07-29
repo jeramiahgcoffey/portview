@@ -14,13 +14,13 @@
 
 **Key Metrics:**
 
-- Files analyzed: 19/19 pre-report changed files (100%)
+- Files analyzed: 22/22 final changed files (100%)
 - Production Go files analyzed: 8/8 (100%)
 - Changed-function test gaps: 0 blocking gaps
 - High-blast-radius changes: 0
 - Security regressions detected: 0
-- Resolved during review: 1 asynchronous persistence-ordering defect
-- Final statement coverage: 71.6% repository-wide
+- Resolved during review: 2 persistence defects and 2 documentation findings
+- Final statement coverage: 72.4% repository-wide
 
 The change preserves portview's core safety boundaries: discovery and probes
 remain localhost-only, port arguments remain range-validated, hiding never
@@ -36,10 +36,10 @@ unchanged, and the default CLI table/JSON shapes remain backward-compatible.
 | Area | Files | Risk | Blast radius |
 |------|-------|------|--------------|
 | IPv4/IPv6 health and HTTP probing | `internal/scanner/scanner.go`, `internal/scanner/detail.go` | MEDIUM | LOW (two platform scanners and one insight command) |
-| Hidden-state decoration | `internal/config/config.go`, `internal/scanner/scanner.go` | MEDIUM | LOW (CLI and TUI decoration paths) |
+| Hidden-state decoration and persistence | `internal/config/config.go`, `internal/scanner/scanner.go` | MEDIUM | LOW (CLI and TUI decoration paths) |
 | CLI visibility commands/output | `internal/cli/cli.go` | MEDIUM | LOW (single command dispatcher) |
 | TUI visibility and persistence | `internal/tui/model.go`, `commands.go`, `keys.go`, `view.go` | MEDIUM | LOW (single Bubble Tea model) |
-| Tests | six `*_test.go` files | LOW | Test-only |
+| Tests | seven `*_test.go` files | LOW | Test-only |
 | Documentation/demo | README, changelog, design doc, VHS source/GIF | LOW | User-facing only |
 
 Pre-report totals were 795 additions and 91 deletions across 19 files,
@@ -56,8 +56,9 @@ including the new changelog and regenerated binary GIF.
   receives the additional `HIDDEN` table column.
 - Scan results are decorated with current config on receipt, preventing an
   older in-flight scan from reverting a newer UI edit.
-- Config writes are revision-ordered and serialized so asynchronous Tea
-  commands cannot persist stale state.
+- Config edits use locked, atomic read-modify-write transactions. TUI edits are
+  queued and revision-ordered so asynchronous or cross-process changes cannot
+  discard one another.
 
 ## Findings
 
@@ -75,15 +76,41 @@ config value for each edit and wrote it independently. A rapid hide followed
 by unhide could execute the newer write first and then allow the older write
 to overwrite disk, leaving the UI and persisted config inconsistent.
 
-The fix introduces a shared `configSaver` that:
+The final fix introduces a shared `configSaver` that queues immutable
+preference-level edits, assigns monotonic revisions, and lets whichever Tea
+command executes first drain all scheduled edits in order. Model revisions
+prevent an older save result from replacing a newer local edit.
 
-1. deep-copies maps and slices at schedule time;
-2. assigns each save a monotonically increasing revision;
-3. serializes writes under a mutex; and
-4. discards commands superseded before execution.
+Deterministic tests execute newest-before-oldest and prove that the complete
+edit queue is persisted once without a stale result changing model state.
 
-Deterministic tests execute newest-before-oldest and mutate the source config
-after scheduling to prove both ordering and snapshot isolation.
+### Resolved during remote review: cross-process config lost update
+
+**Files:** `internal/config/config.go`, `internal/cli/cli.go`,
+`internal/tui/commands.go`, `internal/tui/model.go`
+**Original severity:** HIGH
+**Blast radius:** LOW (label and hide/unhide persistence)
+**Test coverage:** YES
+
+CodeRabbit correctly identified that serialized Tea commands alone did not
+coordinate separate CLI/TUI processes. A stale full-config snapshot could
+silently replace an independent label or visibility edit.
+
+The follow-up adds:
+
+1. a persistent sibling advisory lock shared by all portview config writers;
+2. locked reload-mutate-save transactions for preference-level updates;
+3. atomic temporary-file replacement so readers never see partial YAML;
+4. explicit TUI edit operations that merge into the latest on-disk config; and
+5. model adoption of external changes returned by the locked transaction.
+
+Concurrent-update, external-change, no-op, revision-order, and stale-result
+tests cover the resulting data-integrity boundary.
+
+### Resolved during remote review: documentation accuracy and lint
+
+The design document now separates scanner enrichment from receipt-time config
+decoration and removes the MD028 blank line inside its release-note blockquote.
 
 ## Test Coverage Analysis
 
@@ -92,12 +119,18 @@ after scheduling to prove both ordering and snapshot isolation.
 | `dialHealthy` | 100.0% |
 | `ProbeHTTP` | 88.9% |
 | `Config.Decorate` | 100.0% |
+| `Config.Save` | 75.0% |
+| `Config.Update` | 75.0% |
+| `Config.UpdateFrom` | 84.6% |
+| `withFileLock` | 75.0% |
+| `saveUnlocked` | 56.5% (success path plus error cleanup) |
 | `writeServerTable` | 93.3% |
-| `runVisibility` | 77.3% |
+| `runVisibility` | 88.0% |
 | `runHidden` | 79.4% |
-| `configSaver.command` | 100.0% |
-| `cloneConfig` | 100.0% |
-| `handleNormal` | 94.2% |
+| `configEdit.apply` | 100.0% |
+| `configSaver.command` | 95.2% |
+| `handleNormal` | 94.6% |
+| `handleLabel` | 94.4% |
 | `visibilityServers` | 100.0% |
 | `visibleServers` | 100.0% |
 | `hiddenCount` | 100.0% |
@@ -108,7 +141,8 @@ after scheduling to prove both ordering and snapshot isolation.
 Coverage includes IPv4-only and IPv6-only listeners, closed ports, redirects,
 hide/unhide persistence, idempotent CLI behavior, JSON output, default table
 compatibility, hidden-row rendering, empty-state behavior, stale scan
-decoration, stale save ordering, and immutable save snapshots.
+decoration, stale save ordering, cross-process update merging, atomic
+persistence, and stale save-result rejection.
 
 ## Blast Radius Analysis
 
@@ -145,7 +179,8 @@ logic, release credentials, or remote network discovery code changed.
 | Hidden listener becomes indistinguishable when revealed | Explicit `[hidden]` or `[h]` marker; visually and automatically tested |
 | Default script output breaks after upgrade | Default table unchanged; false `hidden` JSON omitted |
 | Old scan result reverts a recent hide/label | Config applied at result receipt; regression test passes |
-| Old async save overwrites a recent edit | Revisioned serialized writer; deterministic regression test passes |
+| Old async save overwrites a recent edit | Revisioned edit queue; deterministic regression test passes |
+| Concurrent CLI/TUI writes discard independent config changes | Locked read-modify-write mutation; concurrent regression test passes |
 | IPv6-only server is misreported down | Unit and real Vite smoke tests pass |
 
 ## Recommendations
@@ -163,9 +198,9 @@ logic, release credentials, or remote network discovery code changed.
 
 ### Technical debt
 
-- Concurrent config changes from separate OS processes remain last-writer-wins,
-  matching the pre-existing config model. Consider file locking only if real
-  concurrent CLI/TUI usage becomes common.
+- The lock is advisory: portview CLI/TUI processes coordinate fully, while a
+  third-party editor that deliberately ignores the sibling lock remains
+  outside that guarantee.
 
 ## Analysis Methodology
 
@@ -188,15 +223,19 @@ logic, release credentials, or remote network discovery code changed.
 - `go test -race ./...`
 - `go vet ./...`
 - `golangci-lint`: 0 issues
+- `markdownlint-cli2` 0.23.1: 0 issues across all changed Markdown
 - macOS/Linux amd64/arm64 cross-builds
 - isolated CLI hide/list/unhide lifecycle
+- ten concurrent CLI processes preserving every independent hidden port
 - real IPv6-only Vite listener smoke test
 - regenerated GIF contact-sheet inspection
 
-**Limitations:**
+**Remote review:**
 
-- CodeRabbit CLI review was unavailable at report time because the local CLI
-  was signed out.
-- GitHub-hosted CI and release workflow results are pending publication.
+- CodeRabbit's GitHub review completed against the initial PR head and its
+  three actionable comments were independently verified and fixed.
+- GitHub CI passed on Linux, macOS, and lint before the review follow-up; the
+  follow-up commit requires the same green gate before merge.
+- Tag-triggered release workflow results remain pending release publication.
 
 **Confidence:** HIGH for the reviewed local diff.

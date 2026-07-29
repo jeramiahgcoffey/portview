@@ -210,29 +210,31 @@ func runVisibility(cmd string, args []string, hide bool, stdout, stderr io.Write
 		return 2
 	}
 
-	cfg, err := config.Load()
+	_, changed, err := config.Update(func(current *config.Config) bool {
+		if hide {
+			if current.IsHidden(port) {
+				return false
+			}
+			current.Hide(port)
+			return true
+		}
+		if !current.IsHidden(port) {
+			return false
+		}
+		current.Unhide(port)
+		return true
+	})
 	if err != nil {
 		fprintf(stderr, "portview: %v\n", err)
 		return 1
 	}
-
-	wasHidden := cfg.IsHidden(port)
-	switch {
-	case hide && wasHidden:
-		fprintf(stdout, "port %d is already hidden\n", port)
+	if !changed {
+		if hide {
+			fprintf(stdout, "port %d is already hidden\n", port)
+		} else {
+			fprintf(stdout, "port %d is not hidden\n", port)
+		}
 		return 0
-	case !hide && !wasHidden:
-		fprintf(stdout, "port %d is not hidden\n", port)
-		return 0
-	case hide:
-		cfg.Hide(port)
-	case !hide:
-		cfg.Unhide(port)
-	}
-
-	if err := cfg.Save(); err != nil {
-		fprintf(stderr, "portview: %v\n", err)
-		return 1
 	}
 	if hide {
 		fprintf(stdout, "hid port %d\n", port)

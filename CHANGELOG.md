@@ -21,8 +21,9 @@ All notable user-facing changes to portview are documented here.
   without another platform scan.
 - Apply labels and hidden state when scan results arrive so an older in-flight
   scan cannot revert a newer config edit.
-- Serialize and revision-order asynchronous config writes so rapid edits cannot
-  leave stale label or visibility state on disk.
+- Persist config with locked, revision-ordered read-modify-write transactions
+  so rapid edits and concurrent CLI/TUI processes cannot discard one another's
+  label or visibility changes.
 
 ## v0.2.1 - 2026-07-29
 

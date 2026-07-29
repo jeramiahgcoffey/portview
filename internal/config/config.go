@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 
 	"github.com/jeramiahgcoffey/portview/internal/scanner"
@@ -116,7 +117,9 @@ func LoadFrom(path string) (Config, error) {
 	return c.withDefaults(), nil
 }
 
-// Save writes the config to DefaultPath, creating the directory if needed.
+// Save writes the complete config to DefaultPath under the same file lock used
+// by Update. Callers modifying one preference should use Update so unrelated
+// concurrent edits are merged instead of replaced by a stale snapshot.
 func (c Config) Save() error {
 	path, err := DefaultPath()
 	if err != nil {
@@ -125,18 +128,99 @@ func (c Config) Save() error {
 	return c.SaveTo(path)
 }
 
-// SaveTo writes the config to an explicit path, creating parent directories as
-// needed. This is the lazy-creation point: the file exists only after a save.
+// SaveTo writes the complete config to an explicit path under an advisory
+// sibling lock. The final rename is atomic, so readers never observe partial
+// YAML. This is the lazy-creation point: the config exists only after a save.
 func (c Config) SaveTo(path string) error {
+	return withFileLock(path, func() error {
+		return saveUnlocked(c, path)
+	})
+}
+
+// Update reloads the current config while holding its file lock, applies
+// mutate, and atomically saves when mutate reports a change. It is the safe
+// path for preference-level edits made by concurrent CLI or TUI processes.
+func Update(mutate func(*Config) bool) (Config, bool, error) {
+	path, err := DefaultPath()
+	if err != nil {
+		return Config{}, false, err
+	}
+	return UpdateFrom(path, mutate)
+}
+
+// UpdateFrom is Update for an explicit path. The returned config is the
+// locked, latest state after the mutation (or after a no-op).
+func UpdateFrom(path string, mutate func(*Config) bool) (Config, bool, error) {
+	var (
+		updated Config
+		changed bool
+	)
+	err := withFileLock(path, func() error {
+		current, err := LoadFrom(path)
+		if err != nil {
+			return err
+		}
+		changed = mutate(&current)
+		updated = current.withDefaults()
+		if !changed {
+			return nil
+		}
+		return saveUnlocked(updated, path)
+	})
+	if err != nil {
+		return Config{}, false, err
+	}
+	return updated, changed, nil
+}
+
+func withFileLock(path string, fn func() error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("config: create dir for %s: %w", path, err)
 	}
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("config: open lock for %s: %w", path, err)
+	}
+	defer func() { _ = lock.Close() }()
+
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		return fmt.Errorf("config: lock %s: %w", path, err)
+	}
+	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
+
+	return fn()
+}
+
+func saveUnlocked(c Config, path string) error {
 	data, err := yaml.Marshal(c.withDefaults())
 	if err != nil {
 		return fmt.Errorf("config: marshal: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("config: write %s: %w", path, err)
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".portview-config-*")
+	if err != nil {
+		return fmt.Errorf("config: create temporary file for %s: %w", path, err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("config: chmod temporary file for %s: %w", path, err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("config: write temporary file for %s: %w", path, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("config: sync temporary file for %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("config: close temporary file for %s: %w", path, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("config: replace %s: %w", path, err)
 	}
 	return nil
 }
