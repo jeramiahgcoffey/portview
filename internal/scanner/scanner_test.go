@@ -91,20 +91,38 @@ func TestSortByPort(t *testing.T) {
 	}
 }
 
-func TestDialHealthy(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+func listenLoopback(t *testing.T, network, address string) net.Listener {
+	t.Helper()
+	ln, err := net.Listen(network, address)
 	if err != nil {
-		t.Fatalf("listen: %v", err)
+		if network == "tcp6" {
+			t.Skipf("IPv6 loopback unavailable: %v", err)
+		}
+		t.Fatalf("listen %s %s: %v", network, address, err)
 	}
-	defer ln.Close()
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln
+}
+
+func TestDialHealthyIPv4(t *testing.T) {
+	ln := listenLoopback(t, "tcp4", "127.0.0.1:0")
 	port := ln.Addr().(*net.TCPAddr).Port
 
 	if !dialHealthy(port, 500*time.Millisecond) {
-		t.Errorf("dialHealthy(%d) = false, want true for an open listener", port)
+		t.Errorf("dialHealthy(%d) = false, want true for an IPv4 listener", port)
 	}
 
-	ln.Close()
+	_ = ln.Close()
 	if dialHealthy(port, 200*time.Millisecond) {
 		t.Errorf("dialHealthy(%d) = true, want false after listener closed", port)
+	}
+}
+
+func TestDialHealthyIPv6(t *testing.T) {
+	ln := listenLoopback(t, "tcp6", "[::1]:0")
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	if !dialHealthy(port, 500*time.Millisecond) {
+		t.Errorf("dialHealthy(%d) = false, want true for an IPv6 listener", port)
 	}
 }

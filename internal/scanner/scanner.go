@@ -90,9 +90,11 @@ func dedupeByPort(in []listing) []listing {
 }
 
 // dialHealthy reports whether a TCP connection to localhost:port succeeds
-// within timeout.
+// within timeout. Using the hostname instead of a fixed loopback address lets
+// Go's dialer race IPv4 and IPv6, so an IPv6-only dev server is not reported as
+// unhealthy.
 func dialHealthy(port int, timeout time.Duration) bool {
-	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	addr := net.JoinHostPort("localhost", strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return false
